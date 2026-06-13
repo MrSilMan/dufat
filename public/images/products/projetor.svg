@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" role="img">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0a1422"/>
+      <stop offset="1" stop-color="#114F8C"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.42" r="0.55">
+      <stop offset="0" stop-color="#8FC3FF" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#8FC3FF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="800" height="600" fill="url(#bg)"/>
+  <rect width="800" height="600" fill="url(#glow)"/>
+  
+    <g transform="translate(400 300) rotate(-12)">
+      <rect x="-140" y="-90" width="280" height="180" rx="22" fill="#c7ced6"/>
+      <rect x="-110" y="-60" width="220" height="120" rx="12" fill="#eaf6ff"/>
+      <g stroke="#9aa3ad" stroke-width="5"><line x1="-110" y1="-60" x2="-110" y2="60"/><line x1="-55" y1="-60" x2="-55" y2="60"/><line x1="0" y1="-60" x2="0" y2="60"/><line x1="55" y1="-60" x2="55" y2="60"/><line x1="110" y1="-60" x2="110" y2="60"/></g>
+      <path d="M-40 90 L-60 150 H60 L40 90 Z" fill="#9aa3ad"/>
+    </g>
+    <ellipse cx="400" cy="180" rx="220" ry="70" fill="#8FC3FF" opacity="0.18"/>
+</svg>

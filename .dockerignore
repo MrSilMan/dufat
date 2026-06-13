@@ -1,0 +1,12 @@
+node_modules
+.next
+.git
+logs
+*.md
+!README.md
+.env
+.env.*
+Dockerfile
+docker-compose.yml
+public/uploads/*
+src/generated

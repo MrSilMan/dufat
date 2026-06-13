@@ -1,0 +1,115 @@
+@import "tailwindcss";
+
+@theme {
+  /* Dufat brand palette */
+  --color-dufat: #114f8c;
+  --color-dufat-deep: #0a3158;
+  --color-dufat-bright: #2d77c9;
+  --color-dufat-sky: #8fc3ff;
+  --color-dufat-mist: #d7e6f6;
+
+  /* Night-time site backgrounds */
+  --color-night: #04090f;
+  --color-night-soft: #0a1422;
+  --color-night-line: rgba(143, 195, 255, 0.14);
+
+  --font-display: var(--font-archivo), "Arial Black", sans-serif;
+  --font-sans: var(--font-inter), system-ui, sans-serif;
+
+  --animate-pulse-soft: pulse-soft 2.2s ease-in-out infinite;
+  --animate-marquee: marquee 36s linear infinite;
+
+  @keyframes pulse-soft {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.45;
+    }
+  }
+
+  @keyframes marquee {
+    from {
+      transform: translateX(0);
+    }
+    to {
+      transform: translateX(-50%);
+    }
+  }
+}
+
+html {
+  scroll-behavior: auto; /* GSAP ScrollTrigger owns scrolling behaviour */
+}
+
+body {
+  background-color: var(--color-night);
+  color: #f3f7fc;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+::selection {
+  background-color: var(--color-dufat);
+  color: #fff;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-dufat-sky);
+  outline-offset: 2px;
+}
+
+/* Custom scrollbar tuned to the brand */
+::-webkit-scrollbar {
+  width: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-night);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-dufat-deep);
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-dufat);
+}
+
+@utility container-site {
+  margin-inline: auto;
+  width: 100%;
+  max-width: 72rem;
+  padding-inline: 1.5rem;
+}
+
+@utility glow-blue {
+  box-shadow: 0 0 40px rgba(17, 79, 140, 0.55);
+}
+
+@utility card-night {
+  background: linear-gradient(160deg, rgba(17, 79, 140, 0.16), rgba(10, 20, 34, 0.7));
+  border: 1px solid var(--color-night-line);
+  border-radius: 1rem;
+  backdrop-filter: blur(8px);
+}
+
+/* Headings default to the display face */
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+/* Reduced motion: kill non-essential animation globally */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

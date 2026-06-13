@@ -1,0 +1,131 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  EDITOR
+}
+
+enum QuoteStatus {
+  NEW
+  IN_PROGRESS
+  WON
+  CLOSED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         Role     @default(ADMIN)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Category {
+  id          String    @id @default(cuid())
+  slug        String    @unique
+  name        String
+  description String?
+  sortOrder   Int       @default(0)
+  products    Product[]
+}
+
+model Product {
+  id               String         @id @default(cuid())
+  slug             String         @unique
+  sku              String?        @unique
+  name             String
+  modelCode        String?
+  shortDescription String
+  description      String
+  heroImage        String?
+  gallery          String[]       @default([])
+  priceKz          Decimal?       @db.Decimal(12, 2)
+  wattage          Int?
+  lumens           Int?
+  featured         Boolean        @default(false)
+  published        Boolean        @default(true)
+  has3dViewer      Boolean        @default(false)
+  categoryId       String
+  category         Category       @relation(fields: [categoryId], references: [id])
+  specs            Spec[]
+  quoteRequests    QuoteRequest[]
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@index([categoryId, published])
+}
+
+model Spec {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  group     String
+  label     String
+  value     String
+  sortOrder Int     @default(0)
+
+  @@index([productId])
+}
+
+model CaseStudy {
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  title     String
+  client    String
+  location  String
+  summary   String
+  body      String
+  heroImage String?
+  stats     Json?
+  published Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model QuoteRequest {
+  id        String      @id @default(cuid())
+  name      String
+  email     String
+  phone     String?
+  company   String?
+  message   String
+  quantity  Int?
+  productId String?
+  product   Product?    @relation(fields: [productId], references: [id], onDelete: SetNull)
+  status    QuoteStatus @default(NEW)
+  createdAt DateTime    @default(now())
+}
+
+model ContactSubmission {
+  id        String   @id @default(cuid())
+  name      String
+  email     String
+  phone     String?
+  subject   String
+  message   String
+  createdAt DateTime @default(now())
+}
+
+model NewsletterSubscriber {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  createdAt DateTime @default(now())
+}
+
+model PageView {
+  id        String   @id @default(cuid())
+  path      String
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
