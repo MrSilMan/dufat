@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { CaseStudyForm } from "@/components/admin/CaseStudyForm";
+import { PageHeader } from "@/components/admin/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -17,25 +18,28 @@ export default async function EditCaseStudyPage({ params }: Props) {
   const statsText = stats.map((stat) => `${stat.label} | ${stat.value}`).join("\n");
 
   return (
-    <div>
-      <h1 className="text-3xl font-black">Editar caso de estudo</h1>
-      <div className="mt-8">
-        <CaseStudyForm
-          study={{
-            id: study.id,
-            title: study.title,
-            slug: study.slug,
-            client: study.client,
-            location: study.location,
-            summary: study.summary,
-            body: study.body,
-            heroImage: study.heroImage,
-            statsText,
-            published: study.published,
-            sortOrder: study.sortOrder,
-          }}
-        />
-      </div>
+    <div className="space-y-8">
+      <PageHeader
+        title="Editar caso de estudo"
+        description={study.title}
+        backHref="/admin/case-studies"
+        backLabel="Casos de Estudo"
+      />
+      <CaseStudyForm
+        study={{
+          id: study.id,
+          title: study.title,
+          slug: study.slug,
+          client: study.client,
+          location: study.location,
+          summary: study.summary,
+          body: study.body,
+          heroImage: study.heroImage,
+          statsText,
+          published: study.published,
+          sortOrder: study.sortOrder,
+        }}
+      />
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { ProductForm } from "@/components/admin/ProductForm";
+import { PageHeader } from "@/components/admin/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -22,31 +23,34 @@ export default async function EditProductPage({ params }: Props) {
     .join("\n");
 
   return (
-    <div>
-      <h1 className="text-3xl font-black">Editar produto</h1>
-      <div className="mt-8">
-        <ProductForm
-          categories={categories}
-          product={{
-            id: product.id,
-            name: product.name,
-            slug: product.slug,
-            sku: product.sku,
-            modelCode: product.modelCode,
-            categoryId: product.categoryId,
-            shortDescription: product.shortDescription,
-            description: product.description,
-            heroImage: product.heroImage,
-            priceKz: product.priceKz ? product.priceKz.toString() : null,
-            wattage: product.wattage,
-            lumens: product.lumens,
-            featured: product.featured,
-            published: product.published,
-            has3dViewer: product.has3dViewer,
-            specsText,
-          }}
-        />
-      </div>
+    <div className="space-y-8">
+      <PageHeader
+        title="Editar produto"
+        description={product.name}
+        backHref="/admin/products"
+        backLabel="Produtos"
+      />
+      <ProductForm
+        categories={categories}
+        product={{
+          id: product.id,
+          name: product.name,
+          slug: product.slug,
+          sku: product.sku,
+          modelCode: product.modelCode,
+          categoryId: product.categoryId,
+          shortDescription: product.shortDescription,
+          description: product.description,
+          heroImage: product.heroImage,
+          priceKz: product.priceKz ? product.priceKz.toString() : null,
+          wattage: product.wattage,
+          lumens: product.lumens,
+          featured: product.featured,
+          published: product.published,
+          has3dViewer: product.has3dViewer,
+          specsText,
+        }}
+      />
     </div>
   );
 }

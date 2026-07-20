@@ -28,6 +28,9 @@ export function Reveal({ children, className, y = 36, delay = 0, stagger }: Prop
         delay,
         ease: "power3.out",
         stagger: stagger ? 0.12 : 0,
+        // Once revealed, drop the inline transform/opacity so grid items can
+        // never be left sitting misaligned by an interrupted tween.
+        clearProps: "transform,opacity,visibility",
         scrollTrigger: {
           trigger: ref.current,
           start: "top 85%",

@@ -16,6 +16,7 @@ export type ProductCard = {
   wattage: number | null;
   lumens: number | null;
   featured: boolean;
+  has3dViewer: boolean;
   category: { slug: string; name: string };
 };
 
@@ -32,6 +33,7 @@ function toCard(product: {
   wattage: number | null;
   lumens: number | null;
   featured: boolean;
+  has3dViewer: boolean;
   category: { slug: string; name: string };
 }): ProductCard {
   return {
@@ -52,6 +54,7 @@ const cardSelect = {
   wattage: true,
   lumens: true,
   featured: true,
+  has3dViewer: true,
   category: { select: { slug: true, name: true } },
 } satisfies Prisma.ProductSelect;
 

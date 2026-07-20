@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { ProductForm } from "@/components/admin/ProductForm";
+import { PageHeader } from "@/components/admin/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -10,11 +11,14 @@ export default async function NewProductPage() {
   });
 
   return (
-    <div>
-      <h1 className="text-3xl font-black">Novo produto</h1>
-      <div className="mt-8">
-        <ProductForm categories={categories} />
-      </div>
+    <div className="space-y-8">
+      <PageHeader
+        title="Novo produto"
+        description="Preencha os dados para adicionar um produto ao catálogo."
+        backHref="/admin/products"
+        backLabel="Produtos"
+      />
+      <ProductForm categories={categories} />
     </div>
   );
 }

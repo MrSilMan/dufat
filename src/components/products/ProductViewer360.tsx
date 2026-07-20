@@ -1,90 +1,84 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { gsap, useGSAP, prefersReducedMotion } from "@/lib/gsap";
+import { cn } from "@/lib/cn";
+import type { TurntableVariant } from "@/lib/three/streetLightAssets";
 
 /**
- * Scroll-scrubbed 360° turntable of the ST89 luminaire head (Three.js),
- * with pointer-drag override. Lazy-loads the Three bundle on mount.
+ * Interactive turntable of the real product model (candeeiro.glb): the ST89
+ * luminaire head or the complete street light. Scroll-scrubbed with pointer
+ * drag override, gentle idle rotation, and a working LED on/off switch.
+ * Lazy-loads the Three bundle on mount.
  */
-export function ProductViewer360({ label }: { label: string }) {
+export function ProductViewer360({
+  label,
+  variant = "head",
+}: {
+  label: string;
+  variant?: TurntableVariant;
+}) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const stateRef = useRef({ scroll: 0, drag: 0, dispose: () => {} });
+  const stateRef = useRef({
+    scroll: 0,
+    drag: 0,
+    pitch: 0,
+    idle: 0,
+    led: 1,
+    setLed: (_: number) => {},
+    dispose: () => {},
+  });
+  const [ready, setReady] = useState(false);
+  const [ledOn, setLedOn] = useState(true);
 
   useEffect(() => {
-    if (!canvasRef.current) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
     let cancelled = false;
+    let frame = 0;
     const state = stateRef.current;
 
     void (async () => {
-      const THREE = await import("three");
-      const { RoomEnvironment } = await import("three/addons/environments/RoomEnvironment.js");
-      const { buildLuminaireHead } = await import("@/lib/three/streetLightModel");
-      const canvas = canvasRef.current;
-      if (cancelled || !canvas) return;
+      const { createTurntableStage } = await import("@/lib/three/turntableStage");
+      let stage: Awaited<ReturnType<typeof createTurntableStage>>;
+      try {
+        stage = await createTurntableStage(canvas, variant);
+      } catch (error) {
+        console.error("ProductViewer360: failed to load candeeiro.glb", error);
+        return;
+      }
+      if (cancelled) {
+        stage.dispose();
+        return;
+      }
+      state.setLed = stage.setLed;
+      stage.setLed(state.led);
+      setReady(true);
 
-      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-      renderer.toneMapping = THREE.ACESFilmicToneMapping;
-
-      const scene = new THREE.Scene();
-      const pmrem = new THREE.PMREMGenerator(renderer);
-      scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-      scene.environmentIntensity = 0.9;
-
-      const camera = new THREE.PerspectiveCamera(32, 1, 0.05, 20);
-      camera.position.set(0, 0.45, 1.7);
-      camera.lookAt(0.1, 0, 0);
-
-      const { head } = buildLuminaireHead();
-      head.position.x = -0.1;
-      const pivot = new THREE.Group();
-      pivot.add(head);
-      pivot.rotation.x = 0.25;
-      scene.add(pivot);
-
-      scene.add(new THREE.AmbientLight(0x8aa6c8, 0.7));
-      const key = new THREE.DirectionalLight(0xffffff, 1.6);
-      key.position.set(2, 3, 2);
-      scene.add(key);
-
-      const resize = () => {
-        const parent = canvas.parentElement!;
-        renderer.setSize(parent.clientWidth, parent.clientHeight, false);
-        camera.aspect = parent.clientWidth / parent.clientHeight;
-        camera.updateProjectionMatrix();
-      };
-      const observer = new ResizeObserver(resize);
-      observer.observe(canvas.parentElement!);
-      resize();
-
-      let frame = 0;
-      const loop = () => {
+      const still = prefersReducedMotion();
+      let last = performance.now();
+      const loop = (now: number) => {
         frame = requestAnimationFrame(loop);
-        pivot.rotation.y = state.scroll * Math.PI * 2 + state.drag;
-        renderer.render(scene, camera);
+        const dt = Math.min(now - last, 100) / 1000;
+        last = now;
+        if (!still) state.idle += dt * 0.12;
+        stage.render(state.scroll * Math.PI * 2 + state.drag + state.idle, state.pitch);
       };
-      loop();
+      loop(last);
 
       state.dispose = () => {
         cancelAnimationFrame(frame);
-        observer.disconnect();
-        scene.traverse((object) => {
-          const mesh = object as { geometry?: { dispose(): void }; material?: { dispose(): void } };
-          mesh.geometry?.dispose();
-          mesh.material?.dispose();
-        });
-        pmrem.dispose();
-        renderer.dispose();
+        stage.dispose();
       };
     })();
 
     return () => {
       cancelled = true;
       state.dispose();
+      state.dispose = () => {};
     };
-  }, []);
+  }, [variant]);
 
   useGSAP(
     () => {
@@ -104,16 +98,37 @@ export function ProductViewer360({ label }: { label: string }) {
     { scope: wrapRef },
   );
 
-  // Pointer drag for manual inspection.
-  const dragging = useRef<{ active: boolean; lastX: number }>({ active: false, lastX: 0 });
+  const toggleLed = () => {
+    const next = !ledOn;
+    setLedOn(next);
+    const state = stateRef.current;
+    gsap.to(state, {
+      led: next ? 1 : 0,
+      duration: 0.7,
+      ease: next ? "power4.in" : "power2.out",
+      onUpdate: () => state.setLed(state.led),
+    });
+  };
+
+  // Pointer drag for manual inspection: horizontal spins the turntable,
+  // vertical pitches it (clamped so the model can't flip). Touch keeps
+  // vertical gestures for page scrolling (touch-pan-y), so only mouse/pen
+  // get the pitch axis.
+  const dragging = useRef({ active: false, lastX: 0, lastY: 0 });
   const onPointerDown = (event: React.PointerEvent) => {
-    dragging.current = { active: true, lastX: event.clientX };
+    dragging.current = { active: true, lastX: event.clientX, lastY: event.clientY };
     (event.target as HTMLElement).setPointerCapture(event.pointerId);
   };
   const onPointerMove = (event: React.PointerEvent) => {
     if (!dragging.current.active) return;
-    stateRef.current.drag += (event.clientX - dragging.current.lastX) * 0.008;
+    const state = stateRef.current;
+    state.drag += (event.clientX - dragging.current.lastX) * 0.008;
+    if (event.pointerType !== "touch") {
+      const pitch = state.pitch + (event.clientY - dragging.current.lastY) * 0.006;
+      state.pitch = Math.min(0.7, Math.max(-0.7, pitch));
+    }
     dragging.current.lastX = event.clientX;
+    dragging.current.lastY = event.clientY;
   };
   const onPointerUp = () => {
     dragging.current.active = false;
@@ -121,18 +136,61 @@ export function ProductViewer360({ label }: { label: string }) {
 
   return (
     <div ref={wrapRef} className="relative h-[60vh] min-h-96 w-full md:h-[70vh]">
+      {/* Studio backdrop */}
+      <div
+        aria-hidden
+        className="absolute inset-0 overflow-hidden rounded-3xl border border-line bg-[radial-gradient(ellipse_at_50%_32%,#ffffff,#dce9f7_75%)] shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_20px_44px_-22px_rgba(17,79,140,0.3)]"
+      >
+        <div
+          className={cn(
+            "absolute inset-x-[22%] bottom-[7%] h-14 rounded-[100%] bg-lumen/30 blur-2xl transition-opacity duration-700",
+            ledOn ? "opacity-100" : "opacity-0",
+          )}
+        />
+      </div>
+
       <canvas
         ref={canvasRef}
         role="img"
-        aria-label={`Modelo 3D interativo: ${label}. Role a página ou arraste para rodar.`}
+        aria-label={`Modelo 3D interativo: ${label}. Arraste para rodar.`}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        className="h-full w-full cursor-grab touch-pan-y active:cursor-grabbing"
+        className={cn(
+          "relative h-full w-full cursor-grab touch-pan-y transition-opacity duration-700 active:cursor-grabbing",
+          ready ? "opacity-100" : "opacity-0",
+        )}
       />
-      <p className="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 text-xs uppercase tracking-[0.25em] text-white/40">
-        Role ou arraste para rodar
-      </p>
+
+      {/* Loading shimmer */}
+      {!ready && (
+        <div aria-hidden className="absolute inset-0 flex items-center justify-center">
+          <span className="h-3 w-3 animate-pulse-soft rounded-full bg-dufat-bright shadow-[0_0_18px_rgba(45,119,201,0.7)]" />
+        </div>
+      )}
+
+      {/* LED photocell switch */}
+      <button
+        type="button"
+        onClick={toggleLed}
+        aria-pressed={ledOn}
+        className={cn(
+          "absolute right-4 top-4 inline-flex items-center gap-2 rounded-full border px-4 py-2 font-mono text-xs tracking-wider transition-all duration-300",
+          ledOn
+            ? "border-lumen/60 bg-lumen/15 text-lumen-deep glow-warm"
+            : "border-line bg-white/85 text-ink-faint hover:border-dufat/40",
+        )}
+      >
+        <span
+          aria-hidden
+          className={cn(
+            "h-2 w-2 rounded-full transition-all duration-300",
+            ledOn ? "bg-lumen shadow-[0_0_10px_rgba(255,185,86,1)]" : "bg-ink-faint/40",
+          )}
+        />
+        LED {ledOn ? "ON" : "OFF"}
+      </button>
+
     </div>
   );
 }

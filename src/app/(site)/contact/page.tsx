@@ -40,8 +40,10 @@ export default async function ContactPage({ searchParams }: Props) {
   return (
     <div className="pt-16 md:pt-20">
       <header className="container-site py-14">
-        <p className="text-xs font-bold uppercase tracking-[0.3em] text-dufat-sky">Contacto</p>
-        <h1 className="mt-3 text-4xl font-black md:text-6xl">Vamos iluminar o seu projeto</h1>
+        <p className="eyebrow">Contacto</p>
+        <h1 className="mt-3 text-4xl font-black text-ink md:text-6xl">
+          Vamos iluminar o <span className="text-gradient-warm">seu projeto</span>
+        </h1>
       </header>
 
       <div className="container-site grid gap-12 pb-24 lg:grid-cols-[3fr_2fr]">
@@ -55,8 +57,8 @@ export default async function ContactPage({ searchParams }: Props) {
               className={cn(
                 "rounded-full border px-5 py-2.5 text-sm font-semibold transition-colors",
                 tab === "mensagem"
-                  ? "border-dufat bg-dufat text-white"
-                  : "border-night-line text-white/70 hover:border-dufat-sky/50",
+                  ? "border-transparent bg-gradient-to-r from-dufat-bright to-dufat text-white shadow-[0_10px_22px_-10px_rgba(17,79,140,0.6)]"
+                  : "border-line bg-white text-ink-soft hover:border-dufat/40 hover:text-ink",
               )}
             >
               Mensagem geral
@@ -68,8 +70,8 @@ export default async function ContactPage({ searchParams }: Props) {
               className={cn(
                 "rounded-full border px-5 py-2.5 text-sm font-semibold transition-colors",
                 tab === "orcamento"
-                  ? "border-dufat bg-dufat text-white"
-                  : "border-night-line text-white/70 hover:border-dufat-sky/50",
+                  ? "border-transparent bg-gradient-to-r from-dufat-bright to-dufat text-white shadow-[0_10px_22px_-10px_rgba(17,79,140,0.6)]"
+                  : "border-line bg-white text-ink-soft hover:border-dufat/40 hover:text-ink",
               )}
             >
               Orçamento B2B
@@ -84,9 +86,9 @@ export default async function ContactPage({ searchParams }: Props) {
         </Reveal>
 
         <Reveal delay={0.1} className="space-y-6">
-          <div className="card-night p-7">
-            <h2 className="text-lg font-bold">Loja Kilamba</h2>
-            <address className="mt-3 space-y-2 text-sm not-italic leading-relaxed text-white/70">
+          <div className="card-soft p-7">
+            <h2 className="text-lg font-bold text-ink">Loja Kilamba</h2>
+            <address className="mt-3 space-y-2 text-sm not-italic leading-relaxed text-ink-soft">
               <p>
                 Av. Fidel de Castro — Kilamba
                 <br />
@@ -95,24 +97,24 @@ export default async function ContactPage({ searchParams }: Props) {
                 Luanda, Angola
               </p>
               <p>
-                <a href="tel:+244922293111" className="text-dufat-sky hover:underline">
+                <a href="tel:+244922293111" className="text-dufat hover:underline">
                   +244 922 293 111
                 </a>{" "}
                 ·{" "}
-                <a href="tel:+244929184560" className="text-dufat-sky hover:underline">
+                <a href="tel:+244929184560" className="text-dufat hover:underline">
                   +244 929 184 560
                 </a>
               </p>
               <p>
-                <a href="mailto:geral@dufat.co.ao" className="text-dufat-sky hover:underline">
+                <a href="mailto:geral@dufat.co.ao" className="text-dufat hover:underline">
                   geral@dufat.co.ao
                 </a>
               </p>
-              <p className="text-xs text-white/40">NIF 5002763494</p>
+              <p className="text-xs text-ink-faint">NIF 5002763494</p>
             </address>
           </div>
 
-          <div className="overflow-hidden rounded-2xl border border-night-line">
+          <div className="overflow-hidden rounded-2xl border border-line shadow-[0_14px_34px_-18px_rgba(17,79,140,0.18)]">
             <iframe
               title="Mapa — Dufat, Kilamba, Luanda"
               src="https://maps.google.com/maps?q=Kilamba%20Luanda%20Angola&z=14&output=embed"

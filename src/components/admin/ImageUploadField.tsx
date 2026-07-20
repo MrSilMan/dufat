@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { inputClass } from "@/components/forms/Field";
+import { adminInputClass } from "@/components/admin/ui";
+import { IconImage } from "@/components/admin/icons";
 
 type Props = {
   name: string;
@@ -34,7 +35,7 @@ export function ImageUploadField({ name, label, initialValue }: Props) {
 
   return (
     <div>
-      <label htmlFor={`${name}-url`} className="mb-1.5 block text-sm font-medium text-white/80">
+      <label htmlFor={`${name}-url`} className="mb-1.5 block text-sm font-medium text-a-text">
         {label}
       </label>
       <div className="flex gap-3">
@@ -44,9 +45,9 @@ export function ImageUploadField({ name, label, initialValue }: Props) {
           value={value}
           onChange={(event) => setValue(event.target.value)}
           placeholder="/images/products/… ou /uploads/…"
-          className={inputClass}
+          className={adminInputClass}
         />
-        <label className="flex shrink-0 cursor-pointer items-center rounded-xl border border-night-line px-4 text-sm text-white/70 hover:border-dufat-sky/50">
+        <label className="btn-admin-ghost shrink-0 cursor-pointer">
           Upload
           <input
             type="file"
@@ -59,12 +60,20 @@ export function ImageUploadField({ name, label, initialValue }: Props) {
           />
         </label>
       </div>
-      <div className="mt-2 flex items-center gap-3">
-        {value && (
+      <div className="mt-3 flex items-center gap-3">
+        {value ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={value} alt="" className="h-14 w-20 rounded-lg border border-night-line object-cover" />
+          <img
+            src={value}
+            alt=""
+            className="h-16 w-24 rounded-lg border border-a-line object-cover"
+          />
+        ) : (
+          <span className="flex h-16 w-24 items-center justify-center rounded-lg border border-dashed border-a-line-strong text-a-faint">
+            <IconImage className="h-5 w-5" />
+          </span>
         )}
-        {status && <p className="text-xs text-white/50">{status}</p>}
+        {status && <p className="text-xs text-a-muted">{status}</p>}
       </div>
     </div>
   );

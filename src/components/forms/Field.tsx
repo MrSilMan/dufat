@@ -9,18 +9,18 @@ type Props = {
 };
 
 export const inputClass =
-  "w-full rounded-xl border border-night-line bg-night-soft px-4 py-3 text-sm text-white placeholder:text-white/35 focus:border-dufat-sky";
+  "w-full rounded-xl border border-line bg-white px-4 py-3 text-sm text-ink placeholder:text-ink-faint focus:border-dufat-bright";
 
 export function Field({ label, htmlFor, errors, children, optional }: Props) {
   return (
     <div>
-      <label htmlFor={htmlFor} className="mb-1.5 block text-sm font-medium text-white/80">
+      <label htmlFor={htmlFor} className="mb-1.5 block text-sm font-medium text-ink">
         {label}
-        {optional && <span className="ml-1 text-xs text-white/40">(opcional)</span>}
+        {optional && <span className="ml-1 text-xs text-ink-faint">(opcional)</span>}
       </label>
       {children}
       {errors?.[0] && (
-        <p role="alert" className="mt-1.5 text-xs text-amber-400">
+        <p role="alert" className="mt-1.5 text-xs text-lumen-deep">
           {errors[0]}
         </p>
       )}

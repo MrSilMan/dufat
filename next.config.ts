@@ -12,6 +12,20 @@ const nextConfig: NextConfig = {
     "pg",
     "@prisma/adapter-pg",
   ],
+  async headers() {
+    return [
+      {
+        // The 3D assets are large (8–24 MB) and only change when the designer
+        // re-delivers — cache them hard so repeat visits skip the download.
+        // NOTE: a re-delivered GLB must get a new filename (or the URL a
+        // version suffix) to bust this cache.
+        source: "/dufat-3d-assets/:path*",
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=31536000, immutable" },
+        ],
+      },
+    ];
+  },
   images: {
     formats: ["image/avif", "image/webp"],
     // The placeholder catalog art is SVG; serve it safely through next/image.

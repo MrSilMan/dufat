@@ -82,10 +82,11 @@ export function CaseNarrative({ study, index }: { study: CaseStudyData; index: n
             alt=""
             fill
             sizes="100vw"
-            className="object-cover opacity-50"
+            className="object-cover opacity-60"
             priority={index === 0}
           />
-          <div aria-hidden className="absolute inset-0 bg-gradient-to-b from-night/70 via-night/40 to-night" />
+          {/* Night scrim for legibility, fading back into the light page below */}
+          <div aria-hidden className="absolute inset-0 bg-gradient-to-b from-night/70 via-night/45 to-paper" />
         </div>
 
         {/* Title beat */}
@@ -117,9 +118,12 @@ export function CaseNarrative({ study, index }: { study: CaseStudyData; index: n
         >
           <div className="container-site grid gap-4 sm:grid-cols-3">
             {stats.map((stat) => (
-              <div key={stat.label} className="card-night p-6 text-center">
-                <p className="font-display text-3xl font-black text-dufat-sky">{stat.value}</p>
-                <p className="mt-1 text-sm text-white/65">{stat.label}</p>
+              <div
+                key={stat.label}
+                className="rounded-2xl border border-white/40 bg-white/90 p-6 text-center shadow-[0_24px_60px_-20px_rgba(4,9,15,0.5)] backdrop-blur-md"
+              >
+                <p className="font-display text-3xl font-black text-dufat">{stat.value}</p>
+                <p className="mt-1 text-sm text-ink-soft">{stat.label}</p>
               </div>
             ))}
           </div>

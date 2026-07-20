@@ -1,51 +1,73 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
+import { requireAdmin } from "@/lib/auth";
 import { deleteCaseStudy } from "@/server/actions/admin";
+import { PageHeader, PublishBadge, EmptyState, RowEditLink, rowDangerClass } from "@/components/admin/ui";
+import { DangerSubmit } from "@/components/admin/DangerSubmit";
+import { IconBook, IconPlus } from "@/components/admin/icons";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminCaseStudiesPage() {
+  const session = await requireAdmin();
+  const canDelete = session.role === "ADMIN";
   const studies = await prisma.caseStudy.findMany({ orderBy: { sortOrder: "asc" } });
 
   return (
-    <div>
-      <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-black">Casos de Estudo</h1>
-        <Link
-          href="/admin/case-studies/new"
-          className="rounded-full bg-dufat px-5 py-2.5 text-sm font-semibold text-white hover:bg-dufat-bright"
-        >
-          + Novo caso
-        </Link>
-      </div>
+    <div className="space-y-8">
+      <PageHeader
+        title="Casos de Estudo"
+        description="Histórias de projetos executados, apresentadas na página de soluções."
+        action={
+          <Link href="/admin/case-studies/new" className="btn-admin">
+            <IconPlus className="h-4 w-4" />
+            Novo caso
+          </Link>
+        }
+      />
 
-      <div className="card-night mt-8 divide-y divide-night-line">
-        {studies.length === 0 && <p className="p-6 text-sm text-white/50">Ainda sem casos de estudo.</p>}
+      <div className="card-admin list-rows overflow-hidden">
+        {studies.length === 0 && (
+          <EmptyState
+            icon={<IconBook className="h-5 w-5" />}
+            title="Ainda sem casos de estudo"
+            description="Adicione o primeiro projeto para contar a história da Dufat."
+            action={
+              <Link href="/admin/case-studies/new" className="btn-admin-ghost">
+                <IconPlus className="h-4 w-4" />
+                Novo caso
+              </Link>
+            }
+          />
+        )}
         {studies.map((study) => (
-          <div key={study.id} className="flex flex-wrap items-center gap-x-6 gap-y-2 p-5">
+          <div
+            key={study.id}
+            className="flex flex-wrap items-center gap-x-6 gap-y-3 p-5"
+          >
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-a-accent-soft font-mono text-xs font-semibold text-a-on-accent-soft">
+              {String(study.sortOrder).padStart(2, "0")}
+            </span>
             <div className="min-w-48 flex-1">
-              <p className="font-semibold">{study.title}</p>
-              <p className="text-xs text-white/45">
+              <p className="font-semibold text-a-text">{study.title}</p>
+              <p className="mt-0.5 text-xs text-a-faint">
                 {study.location} · {study.client}
               </p>
             </div>
-            <span
-              className={`rounded-full px-2.5 py-0.5 text-xs ${
-                study.published ? "bg-emerald-500/15 text-emerald-400" : "bg-white/10 text-white/50"
-              }`}
-            >
-              {study.published ? "Publicado" : "Rascunho"}
-            </span>
-            <div className="flex gap-3 text-sm">
-              <Link href={`/admin/case-studies/${study.id}/edit`} className="text-dufat-sky hover:underline">
-                Editar
-              </Link>
-              <form action={deleteCaseStudy}>
-                <input type="hidden" name="id" value={study.id} />
-                <button type="submit" className="text-red-400/80 hover:underline">
-                  Apagar
-                </button>
-              </form>
+            <PublishBadge published={study.published} />
+            <div className="flex items-center gap-2">
+              <RowEditLink href={`/admin/case-studies/${study.id}/edit`} />
+              {canDelete && (
+                <form action={deleteCaseStudy}>
+                  <input type="hidden" name="id" value={study.id} />
+                  <DangerSubmit
+                    confirmMessage={`Apagar o caso de estudo “${study.title}”? Esta ação não pode ser desfeita.`}
+                    className={rowDangerClass}
+                  >
+                    Apagar
+                  </DangerSubmit>
+                </form>
+              )}
             </div>
           </div>
         ))}

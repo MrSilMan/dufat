@@ -42,43 +42,43 @@ export function EnergyChart({ wattage, lumens }: { wattage: number; lumens: numb
   );
 
   return (
-    <div ref={ref} className="card-night p-6 md:p-8">
-      <h3 className="text-lg font-bold">Consumo anual por ponto de luz</h3>
-      <p className="mt-1 text-sm text-white/55">12 h de funcionamento por noite (4 380 h/ano)</p>
+    <div ref={ref} className="card-soft p-6 md:p-8">
+      <h3 className="text-lg font-bold text-ink">Consumo anual por ponto de luz</h3>
+      <p className="mt-1 text-sm text-ink-faint">12 h de funcionamento por noite (4 380 h/ano)</p>
 
       <div className="mt-6 space-y-5">
         <div>
           <div className="flex justify-between text-sm">
-            <span className="text-white/75">Vapor de sódio {sodiumWattage} W</span>
-            <span className="font-semibold text-white/75">{sodiumKwh} kWh</span>
+            <span className="text-ink-soft">Vapor de sódio {sodiumWattage} W</span>
+            <span className="font-semibold text-ink-soft">{sodiumKwh} kWh</span>
           </div>
-          <div className="mt-2 h-4 overflow-hidden rounded-full bg-white/10">
-            <div data-bar="100%" className="h-full rounded-full bg-amber-500/80" style={{ width: 0 }} />
+          <div className="mt-2 h-4 overflow-hidden rounded-full bg-dufat/10">
+            <div data-bar="100%" className="h-full rounded-full bg-lumen" style={{ width: 0 }} />
           </div>
         </div>
         <div>
           <div className="flex justify-between text-sm">
-            <span className="text-white/75">LED ST89 {wattage} W</span>
-            <span className="font-semibold text-dufat-sky">{ledKwh} kWh</span>
+            <span className="text-ink-soft">LED ST89 {wattage} W</span>
+            <span className="font-semibold text-dufat">{ledKwh} kWh</span>
           </div>
-          <div className="mt-2 h-4 overflow-hidden rounded-full bg-white/10">
+          <div className="mt-2 h-4 overflow-hidden rounded-full bg-dufat/10">
             <div
               data-bar={`${Math.round((ledKwh / sodiumKwh) * 100)}%`}
-              className="h-full rounded-full bg-dufat-sky"
+              className="h-full rounded-full bg-dufat-bright"
               style={{ width: 0 }}
             />
           </div>
         </div>
       </div>
 
-      <div className="mt-6 flex flex-wrap gap-6 border-t border-night-line pt-5 text-sm">
+      <div className="mt-6 flex flex-wrap gap-6 border-t border-line pt-5 text-sm">
         <p>
-          <span className="font-display text-3xl font-black text-dufat-sky">-{savings}%</span>
-          <span className="ml-2 text-white/60">de energia</span>
+          <span className="font-display text-3xl font-black text-dufat">-{savings}%</span>
+          <span className="ml-2 text-ink-soft">de energia</span>
         </p>
         <p>
-          <span className="font-display text-3xl font-black text-white">{Math.round(lumens / wattage)}</span>
-          <span className="ml-2 text-white/60">lm/W de eficiência</span>
+          <span className="font-display text-3xl font-black text-ink">{Math.round(lumens / wattage)}</span>
+          <span className="ml-2 text-ink-soft">lm/W de eficiência</span>
         </p>
       </div>
     </div>

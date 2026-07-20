@@ -4,17 +4,24 @@ import { WhyDufat } from "@/components/home/WhyDufat";
 import { CategoryGrid } from "@/components/home/CategoryGrid";
 import { Testimonials } from "@/components/home/Testimonials";
 import { listCategories } from "@/lib/catalog";
+import { getSiteSettings } from "@/lib/settings";
 import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
-  title: "Dufat, Lda. — Iluminamos o futuro de Angola",
-  description:
-    "Explore o nosso candeeiro de rua peça a peça: luminárias LED ST89, postes galvanizados, braços e acessórios elétricos para projetos municipais e privados.",
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const settings = await getSiteSettings();
+  const headline = [settings.heroHeadline, settings.heroHighlight].filter(Boolean).join(" ");
+  return {
+    // The hero headline names the home page; the root layout's template already
+    // appends the brand, so it must not be repeated here.
+    title: headline,
+    description: settings.seoDescription,
+  };
+}
 
 export default async function HomePage() {
+  const settings = await getSiteSettings();
   let categories: Awaited<ReturnType<typeof listCategories>> = [];
   try {
     categories = await listCategories();
@@ -26,7 +33,14 @@ export default async function HomePage() {
 
   return (
     <>
-      <HeroSequence />
+      <HeroSequence
+        eyebrow={settings.heroEyebrow}
+        headline={settings.heroHeadline}
+        highlight={settings.heroHighlight}
+        subtitle={settings.heroSubtitle}
+        scrollHint={settings.heroScrollHint}
+        logoUrl={settings.logoUrl}
+      />
       <WhyDufat />
       {categories.length > 0 && <CategoryGrid categories={categories} />}
       <Testimonials />

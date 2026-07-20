@@ -38,7 +38,7 @@ export function FilterBar({ categories }: { categories: Category[] }) {
   }, [search]);
 
   return (
-    <div className="sticky top-16 z-40 border-y border-night-line bg-night/90 py-4 backdrop-blur-md md:top-20">
+    <div className="sticky top-[4.75rem] z-40 border-y border-line bg-paper/90 py-4 backdrop-blur-md md:top-[5.25rem]">
       <div className="container-site flex flex-wrap items-center gap-3">
         <div className="flex flex-wrap gap-2" role="group" aria-label="Filtrar por categoria">
           <button
@@ -47,8 +47,8 @@ export function FilterBar({ categories }: { categories: Category[] }) {
             className={cn(
               "rounded-full border px-4 py-2 text-sm font-medium transition-colors",
               !activeCategory
-                ? "border-dufat bg-dufat text-white"
-                : "border-night-line text-white/70 hover:border-dufat-sky/50",
+                ? "border-transparent bg-gradient-to-r from-dufat-bright to-dufat text-white shadow-[0_10px_22px_-10px_rgba(17,79,140,0.6)]"
+                : "border-line bg-white text-ink-soft hover:border-dufat/40 hover:text-ink",
             )}
           >
             Todos
@@ -62,7 +62,7 @@ export function FilterBar({ categories }: { categories: Category[] }) {
                 "rounded-full border px-4 py-2 text-sm font-medium transition-colors",
                 activeCategory === category.slug
                   ? "border-dufat bg-dufat text-white"
-                  : "border-night-line text-white/70 hover:border-dufat-sky/50",
+                  : "border-line bg-white text-ink-soft hover:border-dufat/40 hover:text-ink",
               )}
             >
               {category.name}
@@ -80,7 +80,7 @@ export function FilterBar({ categories }: { categories: Category[] }) {
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Pesquisar… (ex.: ST89, poste 10m)"
-            className="w-56 rounded-full border border-night-line bg-night-soft px-4 py-2 text-sm text-white placeholder:text-white/35 focus:border-dufat-sky md:w-72"
+            className="w-56 rounded-full border border-line bg-white px-4 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-dufat-bright md:w-72"
           />
           <label htmlFor="catalog-sort" className="sr-only">
             Ordenar
@@ -89,7 +89,7 @@ export function FilterBar({ categories }: { categories: Category[] }) {
             id="catalog-sort"
             value={activeSort}
             onChange={(event) => navigate({ sort: event.target.value })}
-            className="rounded-full border border-night-line bg-night-soft px-4 py-2 text-sm text-white"
+            className="rounded-full border border-line bg-white px-4 py-2 text-sm text-ink"
           >
             <option value="recent">Mais recentes</option>
             <option value="name">Nome A–Z</option>

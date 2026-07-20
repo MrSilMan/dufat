@@ -10,12 +10,12 @@ export function ContactForm() {
 
   if (state.ok) {
     return (
-      <div role="status" className="card-night p-8 text-center">
-        <p className="text-3xl" aria-hidden>
+      <div role="status" className="card-soft p-8 text-center">
+        <p className="text-3xl text-dufat-bright" aria-hidden>
           ✓
         </p>
-        <h3 className="mt-3 text-xl font-bold">Mensagem enviada</h3>
-        <p className="mt-2 text-sm text-white/65">{state.message}</p>
+        <h3 className="mt-3 text-xl font-bold text-ink">Mensagem enviada</h3>
+        <p className="mt-2 text-sm text-ink-soft">{state.message}</p>
       </div>
     );
   }

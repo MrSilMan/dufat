@@ -1,60 +1,127 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { prisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
+import { getSiteSettings } from "@/lib/settings";
 import { logout } from "@/server/actions/auth";
 import { DufatLogo } from "@/components/brand/DufatLogo";
+import { AdminNav } from "@/components/admin/AdminNav";
+import { ThemeToggle } from "@/components/admin/ThemeToggle";
+import { IconExternal, IconLogout } from "@/components/admin/icons";
 
 export const metadata: Metadata = {
   robots: { index: false },
 };
 
-const navigation = [
-  { href: "/admin", label: "Painel" },
-  { href: "/admin/products", label: "Produtos" },
-  { href: "/admin/case-studies", label: "Casos de Estudo" },
-  { href: "/admin/quotes", label: "Orçamentos" },
-];
+function initials(name: string) {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((word) => word[0]!.toUpperCase())
+    .join("");
+}
+
+const badgeClass =
+  "rounded-full border border-a-accent/25 bg-a-accent-soft px-2 py-0.5 text-[0.62rem] font-bold uppercase tracking-[0.14em] text-a-on-accent-soft";
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const session = await requireAdmin();
+  const settings = await getSiteSettings();
+  const newQuotes = await prisma.quoteRequest
+    .count({ where: { status: "NEW" } })
+    .catch(() => 0);
 
   return (
-    <div className="min-h-screen bg-night">
-      <header className="border-b border-night-line bg-night-soft">
-        <div className="container-site flex h-16 items-center justify-between">
-          <div className="flex items-center gap-8">
-            <Link href="/admin" aria-label="Painel de administração">
-              <DufatLogo className="h-7" />
-            </Link>
-            <nav aria-label="Administração" className="hidden gap-5 md:flex">
-              {navigation.map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className="text-sm font-medium text-white/70 hover:text-dufat-sky"
-                >
-                  {item.label}
-                </Link>
-              ))}
-            </nav>
-          </div>
-          <div className="flex items-center gap-4">
-            <Link href="/" className="text-sm text-white/50 hover:text-dufat-sky">
-              Ver site →
-            </Link>
-            <span className="hidden text-sm text-white/50 sm:inline">{session.name}</span>
+    <div id="admin-shell" className="admin-shell">
+      {/* Desktop sidebar */}
+      <aside className="admin-chrome fixed inset-y-0 left-0 z-40 hidden w-64 flex-col lg:flex">
+        <div className="flex h-16 items-center gap-3 px-6">
+          <Link href="/admin" aria-label="Painel de administração">
+            <DufatLogo variant="themed" className="h-6" logoUrl={settings.logoUrl} />
+          </Link>
+          <span className={badgeClass}>Admin</span>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-3 py-2">
+          <AdminNav newQuotes={newQuotes} role={session.role} />
+        </div>
+
+        <div className="space-y-1 p-3">
+          <ThemeToggle />
+          <Link
+            href="/"
+            className="flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm text-a-muted transition-colors hover:bg-a-hover hover:text-a-text"
+          >
+            <IconExternal className="h-4 w-4 text-a-faint" />
+            Ver site
+          </Link>
+          <div className="mt-1 flex items-center gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-a-hover">
+            <span
+              aria-hidden
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-linear-to-br from-dufat-bright to-dufat text-xs font-bold text-white"
+            >
+              {initials(session.name)}
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-semibold text-a-text">{session.name}</p>
+              <p className="truncate text-xs text-a-faint">{session.email}</p>
+            </div>
             <form action={logout}>
               <button
                 type="submit"
-                className="rounded-full border border-night-line px-4 py-1.5 text-sm text-white/70 hover:border-dufat-sky/50"
+                title="Sair"
+                aria-label="Sair"
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-a-faint transition-colors hover:bg-a-hover hover:text-a-text"
               >
-                Sair
+                <IconLogout className="h-4 w-4" />
               </button>
             </form>
           </div>
         </div>
-      </header>
-      <main className="container-site py-10">{children}</main>
+      </aside>
+
+      {/* Mobile top bar */}
+      <div className="flex min-h-screen min-w-0 flex-col lg:pl-64">
+        <header className="admin-chrome admin-chrome-bottom sticky top-0 z-30 lg:hidden">
+          <div className="flex h-14 items-center justify-between px-5">
+            <div className="flex items-center gap-3">
+              <Link href="/admin" aria-label="Painel de administração">
+                <DufatLogo variant="themed" className="h-5" logoUrl={settings.logoUrl} />
+              </Link>
+              <span className={badgeClass}>Admin</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <ThemeToggle variant="icon" />
+              <Link
+                href="/"
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-a-muted transition-colors hover:bg-a-hover hover:text-a-text"
+                title="Ver site"
+                aria-label="Ver site"
+              >
+                <IconExternal className="h-4 w-4" />
+              </Link>
+              <form action={logout}>
+                <button
+                  type="submit"
+                  title="Sair"
+                  aria-label="Sair"
+                  className="flex h-8 w-8 items-center justify-center rounded-lg text-a-muted transition-colors hover:bg-a-hover hover:text-a-text"
+                >
+                  <IconLogout className="h-4 w-4" />
+                </button>
+              </form>
+            </div>
+          </div>
+          <div className="px-5 pb-3">
+            <AdminNav variant="bar" newQuotes={newQuotes} role={session.role} />
+          </div>
+        </header>
+
+        <main className="mx-auto w-full max-w-7xl flex-1 px-5 py-8 md:px-8 lg:px-12 lg:py-12">
+          {children}
+        </main>
+      </div>
     </div>
   );
 }

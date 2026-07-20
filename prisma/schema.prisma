@@ -19,14 +19,78 @@ enum QuoteStatus {
   CLOSED
 }
 
+enum InviteStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+}
+
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
+  id           String     @id @default(cuid())
+  email        String     @unique
   name         String
   passwordHash String
-  role         Role     @default(ADMIN)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  /// Defaults to the least privilege: invited teammates are editors unless an
+  /// admin says otherwise. The seeded owner account is created as ADMIN.
+  role         Role       @default(EDITOR)
+  /// Deactivated users keep their audit trail but cannot sign in.
+  active       Boolean    @default(true)
+  lastLoginAt  DateTime?
+  /// The invite this user signed up through; null for the seeded admin.
+  invitedById  String?
+  invitedBy    User?      @relation("UserInvites", fields: [invitedById], references: [id], onDelete: SetNull)
+  invitedUsers User[]     @relation("UserInvites")
+  auditLogs    AuditLog[]
+  invitesSent  Invite[]   @relation("InviteCreatedBy")
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+}
+
+/// A pending team invitation. The token is stored as a SHA-256 hash — the raw
+/// value only ever exists in the invite link, so a database leak cannot be
+/// replayed to gain access.
+model Invite {
+  id          String       @id @default(cuid())
+  email       String
+  name        String
+  role        Role         @default(EDITOR)
+  tokenHash   String       @unique
+  status      InviteStatus @default(PENDING)
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  createdById String
+  createdBy   User         @relation("InviteCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([email])
+  @@index([status, expiresAt])
+}
+
+/// Append-only trail of every write performed in the admin area.
+model AuditLog {
+  id     String @id @default(cuid())
+  /// Machine-readable event, e.g. "product.updated" (see lib/audit.ts).
+  action String
+  /// Entity type touched, e.g. "Product"; null for session events.
+  entity String?
+  entityId String?
+  /// Human-readable summary shown in the audit table.
+  summary String
+  /// Extra structured context (changed fields, old/new status…).
+  meta   Json?
+  ip     String?
+  /// Actor. Kept as a nullable relation plus a denormalised email/name so the
+  /// trail stays readable even if the user row is later deleted.
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userEmail String
+  userName  String
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
 }
 
 model Category {
@@ -128,4 +192,44 @@ model PageView {
   createdAt DateTime @default(now())
 
   @@index([createdAt])
+}
+
+/// Editable site-wide branding and copy. Single row, pinned to id "singleton";
+/// every column is nullable so an unset field falls back to the code default
+/// in src/lib/settings.ts rather than blanking the site.
+model SiteSettings {
+  id String @id @default("singleton")
+
+  // Hero
+  heroEyebrow    String?
+  heroHeadline   String?
+  heroHighlight  String?
+  heroSubtitle   String?
+  heroScrollHint String?
+
+  // Brand
+  logoUrl    String?
+  faviconUrl String?
+  themeColor String?
+
+  // Footer
+  footerTagline   String?
+  footerNif       String?
+  footerAddress   String?
+  footerPhones    String[] @default([])
+  footerEmail     String?
+  footerCopyright String?
+
+  // SEO
+  seoTitle       String?
+  seoDescription String?
+  ogImageUrl     String?
+
+  // Social
+  facebookUrl  String?
+  instagramUrl String?
+  linkedinUrl  String?
+  whatsappUrl  String?
+
+  updatedAt DateTime @updatedAt
 }

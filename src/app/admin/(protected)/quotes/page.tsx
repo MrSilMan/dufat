@@ -1,6 +1,8 @@
 import { prisma } from "@/lib/db";
 import { updateQuoteStatus } from "@/server/actions/admin";
 import { formatDate } from "@/lib/format";
+import { PageHeader, StatusBadge, EmptyState, adminInputClass } from "@/components/admin/ui";
+import { IconInbox } from "@/components/admin/icons";
 
 export const dynamic = "force-dynamic";
 
@@ -18,55 +20,74 @@ export default async function AdminQuotesPage() {
   });
 
   return (
-    <div>
-      <h1 className="text-3xl font-black">Pedidos de Orçamento</h1>
+    <div className="space-y-8">
+      <PageHeader
+        title="Pedidos de Orçamento"
+        description="Pedidos enviados pelo site, do mais recente para o mais antigo."
+      />
 
-      <div className="card-night mt-8 divide-y divide-night-line">
-        {quotes.length === 0 && <p className="p-6 text-sm text-white/50">Ainda sem pedidos.</p>}
+      <div className="card-admin list-rows overflow-hidden">
+        {quotes.length === 0 && (
+          <EmptyState
+            icon={<IconInbox className="h-5 w-5" />}
+            title="Ainda sem pedidos"
+            description="Os pedidos de orçamento enviados pelo site aparecem aqui."
+          />
+        )}
         {quotes.map((quote) => (
-          <article key={quote.id} className="p-5">
-            <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-              <div className="min-w-48 flex-1">
-                <p className="font-semibold">
-                  {quote.name}
-                  {quote.company && <span className="text-white/50"> · {quote.company}</span>}
-                </p>
-                <p className="text-xs text-white/45">
+          <article key={quote.id} className="p-5 sm:p-6">
+            <div className="flex flex-wrap items-start gap-x-6 gap-y-3">
+              <div className="min-w-52 flex-1">
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <p className="font-semibold text-a-text">{quote.name}</p>
+                  {quote.company && (
+                    <span className="rounded-full border border-a-line px-2 py-0.5 text-xs text-a-muted">
+                      {quote.company}
+                    </span>
+                  )}
+                  <StatusBadge status={quote.status} />
+                </div>
+                <p className="mt-1 text-xs text-a-faint">
                   {quote.email}
                   {quote.phone && ` · ${quote.phone}`}
                 </p>
+                <p className="mt-1 text-sm text-a-accent">
+                  {quote.product?.name ?? "Projeto completo"}
+                  {quote.quantity && (
+                    <span className="text-a-muted"> × {quote.quantity}</span>
+                  )}
+                </p>
               </div>
-              <p className="text-sm text-white/65">
-                {quote.product?.name ?? "Projeto completo"}
-                {quote.quantity && ` × ${quote.quantity}`}
-              </p>
-              <form action={updateQuoteStatus} className="flex items-center gap-2">
-                <input type="hidden" name="id" value={quote.id} />
-                <label htmlFor={`status-${quote.id}`} className="sr-only">
-                  Estado
-                </label>
-                <select
-                  id={`status-${quote.id}`}
-                  name="status"
-                  defaultValue={quote.status}
-                  className="rounded-full border border-night-line bg-night-soft px-3 py-1.5 text-xs text-white"
-                >
-                  {statusOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="submit"
-                  className="rounded-full border border-night-line px-3 py-1.5 text-xs text-dufat-sky hover:border-dufat-sky/50"
-                >
-                  Atualizar
-                </button>
-              </form>
-              <span className="text-xs text-white/40">{formatDate(quote.createdAt)}</span>
+
+              <div className="flex flex-col items-end gap-2.5">
+                <span className="font-mono text-xs text-a-faint">{formatDate(quote.createdAt)}</span>
+                <form action={updateQuoteStatus} className="flex items-center gap-2">
+                  <input type="hidden" name="id" value={quote.id} />
+                  <label htmlFor={`status-${quote.id}`} className="sr-only">
+                    Estado
+                  </label>
+                  <select
+                    id={`status-${quote.id}`}
+                    name="status"
+                    defaultValue={quote.status}
+                    className={`${adminInputClass} w-auto rounded-full py-1.5 pr-8 text-xs`}
+                  >
+                    {statusOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="submit" className="btn-admin-ghost px-3.5 py-1.5 text-xs">
+                    Atualizar
+                  </button>
+                </form>
+              </div>
             </div>
-            <p className="mt-3 max-w-3xl text-sm leading-relaxed text-white/70">{quote.message}</p>
+
+            <p className="mt-4 max-w-3xl rounded-xl border border-a-line bg-a-inset p-3.5 text-sm leading-relaxed text-a-muted">
+              {quote.message}
+            </p>
           </article>
         ))}
       </div>

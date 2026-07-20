@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { preload } from "react-dom";
 import Link from "next/link";
 import { gsap, ScrollTrigger, useGSAP } from "@/lib/gsap";
 import { detectQuality } from "@/lib/three/quality";
+import { SKYLINE_URL, STREET_LIGHT_URL } from "@/lib/three/assetUrls";
 import { HERO_STAGES, FINAL_WINDOW } from "@/content/heroStages";
 import { DufatLogo } from "@/components/brand/DufatLogo";
 import { cn } from "@/lib/cn";
@@ -26,18 +28,47 @@ function useMotionMode(): "full" | "static" | null {
   );
 }
 
+type HeroProps = {
+  /** Admin-editable hero copy (src/lib/settings.ts supplies the defaults). */
+  eyebrow: string;
+  headline: string;
+  /** Tail of the headline that receives the gradient. May be empty. */
+  highlight: string;
+  subtitle: string;
+  scrollHint: string;
+  logoUrl?: string | null;
+};
+
 /**
  * The flagship interaction: a pinned, scroll-scrubbed Three.js street light
  * that the camera tears down component by component while annotation panels
  * with leader lines fade in, and the sky cycles dusk → night → dawn.
  */
-export default function HeroSequence() {
+export default function HeroSequence({
+  eyebrow,
+  headline,
+  highlight,
+  subtitle,
+  scrollHint,
+  logoUrl,
+}: HeroProps) {
+  // Start the (large) GLB download with the HTML itself, well before the
+  // three.js chunk loads and asks for it. crossOrigin must match the loader's
+  // fetch mode or the browser re-downloads instead of reusing the preload.
+  preload(STREET_LIGHT_URL, { as: "fetch", crossOrigin: "anonymous" });
+  // The reveal now waits for the city too, so start that download just as
+  // early — but only on devices that will actually load it.
+  if (typeof window !== "undefined" && detectQuality() === "high") {
+    preload(SKYLINE_URL, { as: "fetch", crossOrigin: "anonymous" });
+  }
+
   const wrapRef = useRef<HTMLElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sceneRef = useRef<HeroScene | null>(null);
   const panelRefs = useRef(new Map<string, HTMLDivElement>());
   const leaderRefs = useRef(new Map<string, SVGLineElement>());
   const dotRefs = useRef(new Map<string, SVGCircleElement>());
+  const railRefs = useRef(new Map<string, HTMLSpanElement>());
   const introRef = useRef<HTMLDivElement>(null);
   const finalRef = useRef<HTMLDivElement>(null);
 
@@ -63,6 +94,9 @@ export default function HeroSequence() {
       } else {
         scene.start();
       }
+      // Hold the branded loader until every GLB (street light + city) is in the scene.
+      await scene.whenReady();
+      if (cancelled) return;
       setReady(true);
     })();
 
@@ -118,6 +152,13 @@ export default function HeroSequence() {
         onUpdate: () => {
           sceneRef.current?.setProgress(proxy.p);
           positionLeaders();
+          // Light up the stage rail dot for the active teardown step.
+          for (const stage of HERO_STAGES) {
+            const railDot = railRefs.current.get(stage.id);
+            if (!railDot) continue;
+            const active = proxy.p >= stage.window[0] && proxy.p < stage.window[1];
+            railDot.dataset.active = active ? "true" : "false";
+          }
         },
       });
 
@@ -183,27 +224,25 @@ export default function HeroSequence() {
   if (mode === "static") {
     return (
       <section aria-label="Apresentação do candeeiro de rua Dufat">
-        <div className="relative h-[70vh]">
+        <div data-hero-dark className="relative h-[70vh]">
           <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
           <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-night to-transparent p-8">
             <div className="container-site">
-              <h1 className="max-w-2xl text-4xl font-black md:text-5xl">
-                Iluminamos o futuro de Angola
+              <h1 className="max-w-2xl text-4xl font-black text-white md:text-5xl">
+                {[headline, highlight].filter(Boolean).join(" ")}
               </h1>
-              <p className="mt-3 max-w-xl text-white/70">
-                Iluminação pública LED, postes galvanizados e material elétrico profissional.
-              </p>
+              <p className="mt-3 max-w-xl text-white/70">{subtitle}</p>
             </div>
           </div>
         </div>
         <div className="container-site grid gap-6 py-16 md:grid-cols-2">
           {HERO_STAGES.map((stage) => (
-            <article key={stage.id} className="card-night p-6">
-              <p className="text-xs font-bold uppercase tracking-widest text-dufat-sky">
+            <article key={stage.id} className="card-soft p-6">
+              <p className="text-xs font-bold uppercase tracking-widest text-dufat-bright">
                 {stage.kicker}
               </p>
-              <h2 className="mt-2 text-2xl font-extrabold">{stage.title}</h2>
-              <ul className="mt-4 space-y-2 text-sm text-white/75">
+              <h2 className="mt-2 text-2xl font-extrabold text-ink">{stage.title}</h2>
+              <ul className="mt-4 space-y-2 text-sm text-ink-soft">
                 {stage.bullets.map((bullet) => (
                   <li key={bullet}>• {bullet}</li>
                 ))}
@@ -218,6 +257,7 @@ export default function HeroSequence() {
   return (
     <section
       ref={wrapRef}
+      data-hero-dark
       aria-label="Apresentação interativa do candeeiro de rua Dufat"
       className="relative h-[680vh]"
     >
@@ -232,7 +272,7 @@ export default function HeroSequence() {
             ready ? "pointer-events-none opacity-0" : "opacity-100",
           )}
         >
-          <DufatLogo className="h-12 animate-pulse-soft" />
+          <DufatLogo className="h-12 animate-pulse-soft" logoUrl={logoUrl} />
           <p className="text-xs uppercase tracking-[0.3em] text-dufat-sky/70">A preparar a luz…</p>
         </div>
 
@@ -268,22 +308,44 @@ export default function HeroSequence() {
           ref={introRef}
           className="absolute inset-0 z-20 flex flex-col items-center justify-end pb-24 text-center"
         >
-          <h1 className="max-w-3xl px-6 text-4xl font-black leading-tight md:text-6xl">
-            Iluminamos o futuro{" "}
-            <span className="bg-gradient-to-r from-dufat-sky to-dufat-bright bg-clip-text text-transparent">
-              de Angola
-            </span>
-          </h1>
-          <p className="mt-4 max-w-xl px-6 text-base text-white/70 md:text-lg">
-            Iluminação pública LED, postes galvanizados e material elétrico — explore o nosso
-            candeeiro, peça a peça.
+          <p className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/25 bg-white/10 px-4 py-1.5 font-mono text-xs tracking-wide text-white/90 backdrop-blur-sm">
+            {eyebrow}
           </p>
+          <h1 className="max-w-3xl px-6 text-4xl font-black leading-tight text-white md:text-6xl">
+            {headline}
+            {highlight && (
+              <>
+                {" "}
+                <span className="bg-gradient-to-r from-dufat-sky to-lumen bg-clip-text text-transparent">
+                  {highlight}
+                </span>
+              </>
+            )}
+          </h1>
+          <p className="mt-4 max-w-xl px-6 text-base text-white/70 md:text-lg">{subtitle}</p>
           <div className="mt-10 flex flex-col items-center gap-2 text-dufat-sky/80">
-            <span className="text-xs uppercase tracking-[0.3em]">Role para explorar</span>
+            <span className="text-xs uppercase tracking-[0.3em]">{scrollHint}</span>
             <span aria-hidden className="block h-9 w-5 rounded-full border border-dufat-sky/50 p-1">
               <span className="block h-2 w-full animate-bounce rounded-full bg-dufat-sky" />
             </span>
           </div>
+        </div>
+
+        {/* Stage progress rail */}
+        <div
+          aria-hidden
+          className="absolute right-5 top-1/2 z-20 hidden -translate-y-1/2 flex-col items-center gap-3 md:flex"
+        >
+          {HERO_STAGES.map((stage) => (
+            <span
+              key={stage.id}
+              ref={(node) => {
+                if (node) railRefs.current.set(stage.id, node);
+              }}
+              data-active="false"
+              className="h-2 w-2 rounded-full bg-white/20 transition-all duration-300 data-[active=true]:scale-150 data-[active=true]:bg-lumen data-[active=true]:shadow-[0_0_12px_rgba(255,185,86,0.9)]"
+            />
+          ))}
         </div>
 
         {/* Component annotation panels */}
@@ -298,15 +360,15 @@ export default function HeroSequence() {
               stage.side === "left" ? "left-6 md:left-16" : "right-6 md:right-16",
             )}
           >
-            <article className="card-night p-6 md:p-7">
-              <p className="text-xs font-bold uppercase tracking-widest text-dufat-sky">
+            <article className="rounded-2xl border border-white/40 bg-white/90 p-6 shadow-[0_24px_60px_-20px_rgba(4,9,15,0.6)] backdrop-blur-md md:p-7">
+              <p className="font-mono text-xs font-semibold uppercase tracking-widest text-lumen-deep">
                 {stage.kicker}
               </p>
-              <h2 className="mt-2 text-2xl font-extrabold md:text-3xl">{stage.title}</h2>
-              <ul className="mt-4 space-y-2 text-sm leading-relaxed text-white/80">
+              <h2 className="mt-2 text-2xl font-extrabold text-ink md:text-3xl">{stage.title}</h2>
+              <ul className="mt-4 space-y-2 text-sm leading-relaxed text-ink-soft">
                 {stage.bullets.map((bullet) => (
                   <li key={bullet} className="flex gap-2">
-                    <span aria-hidden className="mt-1.5 block h-1.5 w-1.5 shrink-0 rounded-full bg-dufat-sky" />
+                    <span aria-hidden className="mt-1.5 block h-1.5 w-1.5 shrink-0 rounded-full bg-lumen" />
                     {bullet}
                   </li>
                 ))}
@@ -320,23 +382,20 @@ export default function HeroSequence() {
           ref={finalRef}
           className="invisible absolute inset-0 z-20 flex flex-col items-center justify-center text-center opacity-0"
         >
-          <p className="text-xs font-bold uppercase tracking-[0.3em] text-dufat-sky">
+          <p className="font-mono text-xs font-semibold uppercase tracking-[0.3em] text-lumen/90">
             Amanheceu — missão cumprida
           </p>
-          <h2 className="mt-4 max-w-3xl px-6 text-3xl font-black md:text-5xl">
-            Do poste ao lúmen, tudo num só fornecedor.
+          <h2 className="mt-4 max-w-3xl px-6 text-3xl font-black text-white md:text-5xl">
+            Do poste ao lúmen,{" "}
+            <span className="bg-gradient-to-r from-dufat-sky to-white bg-clip-text text-transparent">
+              tudo num só fornecedor.
+            </span>
           </h2>
           <div className="mt-8 flex flex-wrap items-center justify-center gap-4 px-6">
-            <Link
-              href="/products"
-              className="rounded-full bg-dufat px-8 py-3.5 font-semibold text-white transition-all hover:bg-dufat-bright hover:glow-blue"
-            >
+            <Link href="/products" className="btn-primary px-8 py-3.5">
               Ver catálogo
             </Link>
-            <Link
-              href="/contact?tab=orcamento"
-              className="rounded-full border border-dufat-sky/40 px-8 py-3.5 font-semibold text-dufat-sky transition-colors hover:bg-dufat-sky/10"
-            >
+            <Link href="/contact?tab=orcamento" className="btn-ghost px-8 py-3.5">
               Pedir orçamento
             </Link>
           </div>

@@ -26,11 +26,11 @@ export default async function SolutionsPage() {
   return (
     <div className="pt-16 md:pt-20">
       <header className="container-site py-16 text-center">
-        <p className="text-xs font-bold uppercase tracking-[0.3em] text-dufat-sky">Soluções</p>
-        <h1 className="mx-auto mt-3 max-w-3xl text-4xl font-black md:text-6xl">
-          Projetos que mudam a noite das cidades
+        <p className="chip-tech border-lumen/60 bg-lumen/10 text-lumen-deep">Soluções</p>
+        <h1 className="mx-auto mt-4 max-w-3xl text-4xl font-black text-ink md:text-6xl">
+          Projetos que mudam a <span className="text-gradient-warm">noite das cidades</span>
         </h1>
-        <p className="mx-auto mt-5 max-w-xl text-white/65">
+        <p className="mx-auto mt-5 max-w-xl text-ink-soft">
           Do levantamento luminotécnico à entrega em obra — role para percorrer três projetos de
           referência.
         </p>
@@ -40,17 +40,14 @@ export default async function SolutionsPage() {
         <CaseNarrative key={study.id} study={study} index={index} />
       ))}
 
-      <section className="border-t border-night-line py-24 text-center">
+      <section className="border-t border-line bg-white py-24 text-center">
         <Reveal className="container-site">
-          <h2 className="text-3xl font-black md:text-4xl">O próximo projeto pode ser o seu</h2>
-          <p className="mx-auto mt-4 max-w-lg text-white/65">
+          <h2 className="text-3xl font-black text-ink md:text-4xl">O próximo projeto pode ser o seu</h2>
+          <p className="mx-auto mt-4 max-w-lg text-ink-soft">
             Enviamos proposta técnica e comercial em 48 horas úteis para projetos municipais e
             privados.
           </p>
-          <Link
-            href="/contact?tab=orcamento"
-            className="mt-8 inline-block rounded-full bg-dufat px-8 py-3.5 font-semibold text-white transition-all hover:bg-dufat-bright hover:glow-blue"
-          >
+          <Link href="/contact?tab=orcamento" className="btn-primary mt-8 px-8 py-3.5">
             Falar com a equipa técnica
           </Link>
         </Reveal>

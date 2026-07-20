@@ -19,7 +19,7 @@ export function NewsletterForm() {
           type="email"
           required
           placeholder="o.seu@email.com"
-          className="w-full rounded-full border border-night-line bg-night-soft px-4 py-2.5 text-sm text-white placeholder:text-white/40 focus:border-dufat-sky"
+          className="w-full rounded-full border border-line bg-white px-4 py-2.5 text-sm text-ink placeholder:text-ink-faint focus:border-dufat-bright"
         />
         <button
           type="submit"
@@ -31,7 +31,7 @@ export function NewsletterForm() {
       </div>
       <p
         role="status"
-        className={`mt-2 min-h-5 text-sm ${state.ok ? "text-emerald-400" : "text-amber-400"}`}
+        className={`mt-2 min-h-5 text-sm ${state.ok ? "text-emerald-600" : "text-lumen-deep"}`}
       >
         {state.message ?? state.errors?.email?.[0] ?? ""}
       </p>
