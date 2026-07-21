@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { preload } from "react-dom";
 import Link from "next/link";
 import { gsap, ScrollTrigger, useGSAP } from "@/lib/gsap";
-import { detectQuality } from "@/lib/three/quality";
+import { detectQuality, shouldLoadSkyline } from "@/lib/three/quality";
 import { SKYLINE_URL, STREET_LIGHT_URL } from "@/lib/three/assetUrls";
 import { HERO_STAGES, FINAL_WINDOW } from "@/content/heroStages";
 import { DufatLogo } from "@/components/brand/DufatLogo";
@@ -58,7 +58,7 @@ export default function HeroSequence({
   preload(STREET_LIGHT_URL, { as: "fetch", crossOrigin: "anonymous" });
   // The reveal now waits for the city too, so start that download just as
   // early — but only on devices that will actually load it.
-  if (typeof window !== "undefined" && detectQuality() === "high") {
+  if (typeof window !== "undefined" && shouldLoadSkyline()) {
     preload(SKYLINE_URL, { as: "fetch", crossOrigin: "anonymous" });
   }
 
@@ -86,6 +86,7 @@ export default function HeroSequence({
       if (cancelled || !canvasRef.current) return;
       scene = new Scene(canvasRef.current, {
         quality: detectQuality(),
+        skyline: shouldLoadSkyline(),
         reducedMotion: mode === "static",
       });
       sceneRef.current = scene;

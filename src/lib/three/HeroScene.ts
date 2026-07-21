@@ -12,7 +12,10 @@ import {
 import type { QualityTier } from "./quality";
 
 export type HeroSceneOptions = {
+  /** Fidelity: antialiasing, pixel ratio, star/particle counts. */
   quality: QualityTier;
+  /** Whether the city GLB is part of this scene — independent of fidelity. */
+  skyline: boolean;
   reducedMotion: boolean;
 };
 
@@ -72,6 +75,11 @@ const LAMP_Y = 8.53;
 // skyline_far.glb lays its road surface at this height; ground-level dressing
 // (light pool, contact shadow) lifts onto it when the environment loads.
 const ROAD_Y = 0.13;
+
+// Everything in the GLB terrain above this height is clipped away. The mesh is
+// flat verge up to ~y1 and then climbs steeply to y33, so anything in 1.5–3
+// keeps the grass and loses the hills; 2.5 leaves a little undulation.
+const TERRAIN_CLIP_Y = 2.5;
 
 // Forward (+X) bias of the light cast — kept small so the pool reads as
 // directly beneath the luminaire head.
@@ -152,6 +160,8 @@ export class HeroScene {
       powerPreference: "high-performance",
     });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, options.quality === "high" ? 1.75 : 1.25));
+    // Lets attachSkyline clip the GLB terrain's hills off at TERRAIN_CLIP_Y.
+    this.renderer.localClippingEnabled = true;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
 
@@ -244,9 +254,13 @@ export class HeroScene {
     this.moonSprite.scale.setScalar(0.055);
     this.scene.add(this.moonSprite);
 
-    // ----- ground (wet asphalt placeholder until the skyline GLB's road arrives) -----
+    // ----- ground (wet asphalt) -----
+    // Sized to sit under the whole city, not just the hero lamp: the skyline
+    // GLB's own terrain is a hilly landscape and gets hidden (see
+    // attachSkyline), so this plane is the ground in every quality tier. Two
+    // triangles, so the extra extent is free.
     this.groundMesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(160, 160),
+      new THREE.PlaneGeometry(1800, 1800),
       new THREE.MeshStandardMaterial({
         color: 0x0e1218,   // dark asphalt, slightly lighter so it reads against the sky
         metalness: 0.75,
@@ -410,7 +424,7 @@ export class HeroScene {
     // Both attach methods catch their own load errors, so this never rejects.
     this.readyPromise = Promise.all([
       this.attachStreetLight(),
-      options.quality === "high" ? this.attachSkyline() : Promise.resolve(),
+      options.skyline ? this.attachSkyline() : Promise.resolve(),
     ]).then(() => undefined);
 
     // ----- resize handling -----
@@ -439,7 +453,7 @@ export class HeroScene {
       this.repositionLampRig(asset.lampAnchor);
       // Without the skyline environment there are no lamps down the avenue —
       // clone the hero light into the distance (geometry is shared, so cheap).
-      if (this.options.quality !== "high") {
+      if (!this.options.skyline) {
         this.addDistantLampClones(asset);
       }
       this.applyLampLevel(this.lampLevel);
@@ -448,6 +462,20 @@ export class HeroScene {
       // Degrade to the empty night scene rather than breaking the hero.
       console.error("HeroScene: failed to load candeeiro.glb", error);
     }
+  }
+
+  /**
+   * The terrain material in the skyline GLB, found by the name the export uses.
+   * A re-delivery that renames it costs us the clip, not the scene.
+   */
+  private grassMaterial(root: THREE.Object3D): THREE.Material | null {
+    let found: THREE.Material | null = null;
+    root.traverse((object) => {
+      const material = (object as THREE.Mesh).material;
+      if (found || !material || Array.isArray(material)) return;
+      if (material.name === "Ground") found = material;
+    });
+    return found;
   }
 
   private async attachSkyline(): Promise<void> {
@@ -460,9 +488,21 @@ export class HeroScene {
       this.skyline = asset;
       this.scene.add(asset.root);
 
-      // The GLB brings its own textured road and terrain — retire placeholders
-      // and lift the road-level dressing onto the GLB road surface.
-      this.groundMesh.visible = false;
+      // The GLB brings its own textured road — retire our lane markings and
+      // lift the road-level dressing onto its surface.
+      //
+      // Its terrain needs cutting down, though. The "Ground" mesh is a single
+      // landscape spanning y −11.2 … +33 — taller than the 8.5 m lamp head — so
+      // from road level the hills fill the frame and hide the city (worst on
+      // narrow viewports, which frame more of them). But 55% of its vertices sit
+      // below y=1: that is real flat grass verge either side of the avenue,
+      // worth keeping. So clip by height rather than hiding the mesh. Where a
+      // hill is cut away the surface opens up, and our asphalt plane below is
+      // what shows through, so no hole reaches the sky.
+      const material = this.grassMaterial(asset.root);
+      if (material) {
+        material.clippingPlanes = [new THREE.Plane(new THREE.Vector3(0, -1, 0), TERRAIN_CLIP_Y)];
+      }
       this.laneDashes.visible = false;
       this.lightPool.position.y = ROAD_Y + 0.015;
       this.lightPoolSheen.position.y = ROAD_Y + 0.017;

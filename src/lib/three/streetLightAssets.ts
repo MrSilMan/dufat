@@ -1,11 +1,12 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 import { SKYLINE_URL, STREET_LIGHT_URL } from "./assetUrls";
 
 /**
  * Loaders + integration patches for the designer-delivered GLB assets:
  *
- *  - /dufat-3d-assets/candeeiro.glb    — the hero street light, six named parts
+ *  - /dufat-3d-assets/candeeiro.v2.glb    — the hero street light, six named parts
  *    (head / arm / pole / base / door / ledpanel), geometry world-baked in
  *    meters: pole base ~y0.42, luminaire head ~y8.5.
  *  - /dufat-3d-assets/skyline_far.glb  — full night environment: textured
@@ -55,7 +56,12 @@ export type SkylineAsset = {
   lampAnchors: THREE.Vector3[];
 };
 
-const loader = new GLTFLoader();
+// Both GLBs are delivered through scripts/optimize-glb.mjs, which lists
+// EXT_meshopt_compression in extensionsRequired — the loader hard-fails without
+// this decoder. (EXT_texture_webp and KHR_mesh_quantization, also required, are
+// handled by GLTFLoader itself.) The decoder ships inside the three package, so
+// there is no extra file to host or CDN to depend on.
+const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
 
 function isStandardMaterial(material: THREE.Material): material is THREE.MeshStandardMaterial {
   return (material as THREE.MeshStandardMaterial).isMeshStandardMaterial === true;
