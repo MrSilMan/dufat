@@ -93,6 +93,15 @@ const LAMP_FORWARD = 0.15;
 const FOG_DENSITY_NEAR = 0.018;
 const FOG_DENSITY_CITY = 0.0013;
 
+// Warm ambient spill from the city (attachSkyline), faded in with the rest.
+const CITY_GLOW_INTENSITY = 0.14;
+
+// The city fades in over this many seconds when its GLB lands: the fog thins
+// from NEAR to CITY (towers emerge from it) while the near-field ground
+// surfaces cross-fade in. Long enough to read as weather, short enough that a
+// fast connection barely notices.
+const SKYLINE_FADE_SECONDS = 2.2;
+
 /** Static fallbacks for annotation anchors until the GLB reports real bounds. */
 const DEFAULT_PART_ANCHORS: Record<PartName, THREE.Vector3> = {
   head: new THREE.Vector3(1.63, 8.53, 0),
@@ -147,6 +156,13 @@ export class HeroScene {
   private glowTexture: THREE.Texture;
   /** Halo sprites on distant lamp heads — faded out with the photocell. */
   private distantHalos: Array<{ material: THREE.SpriteMaterial; base: number }> = [];
+  private cityGlow?: THREE.PointLight;
+  /** 0→1 while the late-arriving city fades in; scales its halos and glow. */
+  private skylineReveal = 1;
+  private skylineFade?: {
+    start: number;
+    groundMaterials: Array<{ material: THREE.MeshStandardMaterial; opacity: number }>;
+  };
 
   private lampLevel = 1;
   private readonly options: HeroSceneOptions;
@@ -419,13 +435,13 @@ export class HeroScene {
     }
 
     // ----- designer-delivered GLB assets -----
-    // The reveal waits for the full environment: showing the lamp against the
-    // placeholder ground while the city GLB streams in reads as a broken page.
-    // Both attach methods catch their own load errors, so this never rejects.
-    this.readyPromise = Promise.all([
-      this.attachStreetLight(),
-      options.skyline ? this.attachSkyline() : Promise.resolve(),
-    ]).then(() => undefined);
+    // The reveal waits only for the lamp. The city GLB is ~5x its size, so on
+    // slow links gating the loader on it tripled the wait; instead it attaches
+    // whenever it lands and fades in through the fog (see the tick() fade),
+    // which keeps the lamp-against-empty-ground moment from reading as broken.
+    // attachStreetLight catches its own load errors, so this never rejects.
+    this.readyPromise = this.attachStreetLight();
+    if (options.skyline) void this.attachSkyline();
 
     // ----- resize handling -----
     this.resizeObserver = new ResizeObserver(() => this.resize());
@@ -465,17 +481,20 @@ export class HeroScene {
   }
 
   /**
-   * The terrain material in the skyline GLB, found by the name the export uses.
-   * A re-delivery that renames it costs us the clip, not the scene.
+   * Skyline GLB materials, found by the names the export uses. A re-delivery
+   * that renames one costs us the terrain clip or the fade, not the scene.
    */
-  private grassMaterial(root: THREE.Object3D): THREE.Material | null {
-    let found: THREE.Material | null = null;
+  private skylineMaterialsByName(
+    root: THREE.Object3D,
+    names: string[],
+  ): THREE.MeshStandardMaterial[] {
+    const found = new Set<THREE.MeshStandardMaterial>();
     root.traverse((object) => {
       const material = (object as THREE.Mesh).material;
-      if (found || !material || Array.isArray(material)) return;
-      if (material.name === "Ground") found = material;
+      if (!material || Array.isArray(material)) return;
+      if (names.includes(material.name)) found.add(material as THREE.MeshStandardMaterial);
     });
-    return found;
+    return [...found];
   }
 
   private async attachSkyline(): Promise<void> {
@@ -499,17 +518,13 @@ export class HeroScene {
       // worth keeping. So clip by height rather than hiding the mesh. Where a
       // hill is cut away the surface opens up, and our asphalt plane below is
       // what shows through, so no hole reaches the sky.
-      const material = this.grassMaterial(asset.root);
+      const [material] = this.skylineMaterialsByName(asset.root, ["Ground"]);
       if (material) {
         material.clippingPlanes = [new THREE.Plane(new THREE.Vector3(0, -1, 0), TERRAIN_CLIP_Y)];
       }
-      this.laneDashes.visible = false;
       this.lightPool.position.y = ROAD_Y + 0.015;
       this.lightPoolSheen.position.y = ROAD_Y + 0.017;
       this.contactShadow.position.y = ROAD_Y + 0.01;
-
-      // Open the atmosphere so buildings hundreds of meters out read through.
-      (this.scene.fog as THREE.FogExp2).density = FOG_DENSITY_CITY;
 
       // Halo sprite on every distant lamp head — the glowing dots that sell
       // the avenue at night. Grows slightly with distance so far lamps stay
@@ -532,16 +547,47 @@ export class HeroScene {
       }
 
       // Warm ambient spill from the city.
-      const cityGlow = new THREE.PointLight(0xff9055, 0.14, 160, 1.2);
-      cityGlow.position.set(-5, 20, -120);
-      this.scene.add(cityGlow);
+      this.cityGlow = new THREE.PointLight(0xff9055, CITY_GLOW_INTENSITY, 160, 1.2);
+      this.cityGlow.position.set(-5, 20, -120);
+      this.scene.add(this.cityGlow);
 
       // Re-apply the current story beat to the freshly arrived materials.
       this.updateSky();
-      if (this.options.reducedMotion) this.renderOnce();
+
+      if (this.options.reducedMotion) {
+        // Static frame: no animation loop to run the fade — cut to the final
+        // look and re-render.
+        this.laneDashes.visible = false;
+        (this.scene.fog as THREE.FogExp2).density = FOG_DENSITY_CITY;
+        this.renderOnce();
+        return;
+      }
+      this.beginSkylineFade(asset.root);
     } catch (error) {
       console.error("HeroScene: failed to load skyline_far.glb", error);
     }
+  }
+
+  /**
+   * The city may land after the hero has already revealed (it no longer gates
+   * the loader), so it can't just pop into frame. The dense pre-city fog
+   * already hides everything beyond ~100 m, which lets the towers *emerge* as
+   * tick() thins it to FOG_DENSITY_CITY. The near-field surfaces (grass verge,
+   * road, paving) sit inside the fog's visible range though, so they get a
+   * real opacity cross-fade over our placeholder asphalt.
+   */
+  private beginSkylineFade(root: THREE.Object3D): void {
+    const groundMaterials = this.skylineMaterialsByName(root, ["Ground", "Road", "Paviment"]).map(
+      (material) => {
+        const entry = { material, opacity: material.opacity };
+        material.transparent = true;
+        material.opacity = 0;
+        material.needsUpdate = true;
+        return entry;
+      },
+    );
+    this.skylineReveal = 0;
+    this.skylineFade = { start: this.timer.getElapsed(), groundMaterials };
   }
 
   /** Anchor lights, halos, beams and pools to the loaded LED panel centre. */
@@ -686,7 +732,10 @@ export class HeroScene {
 
   // ---------- public API ----------
 
-  /** Resolves once every GLB for this quality tier is in the scene (or failed to load). */
+  /**
+   * Resolves once the street light GLB is in the scene (or failed to load).
+   * The skyline doesn't gate this — it fades in whenever it lands.
+   */
   whenReady(): Promise<void> {
     return this.readyPromise;
   }
@@ -819,7 +868,7 @@ export class HeroScene {
       }
     }
     for (const { material, base } of this.distantHalos) {
-      material.opacity = base * level;
+      material.opacity = base * level * this.skylineReveal;
     }
     if (this.particles) {
       (this.particles.material as THREE.PointsMaterial).opacity = 0.5 * level;
@@ -828,6 +877,35 @@ export class HeroScene {
 
   private tick(): void {
     const t = this.timer.getElapsed();
+
+    // Late-arriving city: thin the fog out and cross-fade the near surfaces.
+    if (this.skylineFade) {
+      const k = easeInOutCubic(
+        THREE.MathUtils.clamp((t - this.skylineFade.start) / SKYLINE_FADE_SECONDS, 0, 1),
+      );
+      this.skylineReveal = k;
+      (this.scene.fog as THREE.FogExp2).density = THREE.MathUtils.lerp(
+        FOG_DENSITY_NEAR,
+        FOG_DENSITY_CITY,
+        k,
+      );
+      for (const { material, opacity } of this.skylineFade.groundMaterials) {
+        material.opacity = opacity * k;
+      }
+      if (this.cityGlow) this.cityGlow.intensity = CITY_GLOW_INTENSITY * k;
+      if (k >= 1) {
+        // Restore opaque rendering — a permanently transparent terrain would
+        // pay blending and sort-order costs every frame from here on.
+        for (const { material, opacity } of this.skylineFade.groundMaterials) {
+          material.transparent = false;
+          material.opacity = opacity;
+          material.needsUpdate = true;
+        }
+        // The GLB road is opaque now and fully covers our lane markings.
+        this.laneDashes.visible = false;
+        this.skylineFade = undefined;
+      }
+    }
 
     // Idle drift layered on top of the scroll-driven camera position.
     const driftX = Math.sin(t * 0.23) * 0.06;

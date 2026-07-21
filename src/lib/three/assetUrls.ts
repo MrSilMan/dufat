@@ -9,4 +9,4 @@
  * scripts/optimize-glb.mjs is re-run against new designer source files.
  */
 export const STREET_LIGHT_URL = "/dufat-3d-assets/candeeiro.v2.glb";
-export const SKYLINE_URL = "/dufat-3d-assets/skyline_far.v2.glb";
+export const SKYLINE_URL = "/dufat-3d-assets/skyline_far.v3.glb";

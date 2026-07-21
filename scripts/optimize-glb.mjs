@@ -22,21 +22,32 @@
  *
  * Outputs are written as `<name>.vN.glb`. The version suffix is required:
  * next.config.ts serves this directory `immutable, max-age=1y`, so reusing a
- * filename strands returning visitors on the old asset. Bump VERSION here and
- * the URLs in src/lib/three/assetUrls.ts together.
+ * filename strands returning visitors on the old asset. Bump the per-source
+ * `version` here and the URL in src/lib/three/assetUrls.ts together — only
+ * for the asset whose pipeline settings changed, so returning visitors keep
+ * their cached copy of the other one.
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 
-const VERSION = "v2";
 const ASSET_DIR = path.join(process.cwd(), "public", "dufat-3d-assets");
 // The hero lamp is the product being sold and fills the frame, so it gets the
 // higher texture quality; the skyline is set dressing seen through fog at
 // distance. The split costs ~250 KB and keeps the LED diode grid crisp.
 const SOURCES = [
-  { name: "candeeiro", quality: 95 },
-  { name: "skyline_far", quality: 85 },
+  { name: "candeeiro", quality: 95, version: "v2" },
+  {
+    name: "skyline_far",
+    quality: 85,
+    version: "v3",
+    // The tiled ground PBR sets (grass verge, road, paving, metal) were
+    // ~1.7 MB of the 2.8 MB file at 1K, yet they repeat many times across the
+    // terrain, so 512 px keeps their on-screen texel density fine at night.
+    // The building facade textures ("Captura de ecrã …") are what the city
+    // actually shows — they stay at the global ceiling above.
+    downsize: { pattern: "{Grass005,Road007,PavingStones081,metal_0010}*", size: 512 },
+  },
 ];
 
 /** Names the runtime resolves by string — a rename here is a broken hero. */
@@ -64,15 +75,24 @@ function nameTable(file) {
 const cli = (...args) =>
   execFileSync("npx", ["--yes", "@gltf-transform/cli", ...args], { stdio: "inherit" });
 
-for (const { name, quality } of SOURCES) {
+for (const { name, quality, version, downsize } of SOURCES) {
   const source = path.join(ASSET_DIR, `${name}.glb`);
-  const output = path.join(ASSET_DIR, `${name}.${VERSION}.glb`);
+  const output = path.join(ASSET_DIR, `${name}.${version}.glb`);
   const stepA = path.join(ASSET_DIR, `${name}.step-a.tmp.glb`);
   const stepB = path.join(ASSET_DIR, `${name}.step-b.tmp.glb`);
 
   try {
     // 1K is the ceiling anything reaches on screen; several sources were larger.
     cli("resize", source, stepA, "--width", "1024", "--height", "1024");
+    if (downsize) {
+      // Second, tighter pass for textures that can afford it (see SOURCES).
+      cli(
+        "resize", stepA, stepA,
+        "--pattern", downsize.pattern,
+        "--width", String(downsize.size),
+        "--height", String(downsize.size),
+      );
+    }
     // The big one: 16-bit RGBA PNG normal maps are ~124x their WebP equivalent.
     cli("webp", stepA, stepB, "--quality", String(quality));
     // Quantised + meshopt geometry. GLTFLoader needs MeshoptDecoder for this,

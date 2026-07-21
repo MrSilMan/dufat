@@ -56,8 +56,11 @@ export default function HeroSequence({
   // three.js chunk loads and asks for it. crossOrigin must match the loader's
   // fetch mode or the browser re-downloads instead of reusing the preload.
   preload(STREET_LIGHT_URL, { as: "fetch", crossOrigin: "anonymous" });
-  // The reveal now waits for the city too, so start that download just as
-  // early — but only on devices that will actually load it.
+  // The city doesn't gate the reveal (it fades in when it lands), but the
+  // sooner it downloads the sooner that happens. SkylinePreload's inline
+  // script already started this download from the SSR HTML; this client-side
+  // call is a dedupe/fallback (the browser reuses an in-flight preload for
+  // the same URL/as/crossOrigin), kept so the hero works standalone too.
   if (typeof window !== "undefined" && shouldLoadSkyline()) {
     preload(SKYLINE_URL, { as: "fetch", crossOrigin: "anonymous" });
   }
@@ -95,7 +98,8 @@ export default function HeroSequence({
       } else {
         scene.start();
       }
-      // Hold the branded loader until every GLB (street light + city) is in the scene.
+      // Hold the branded loader only until the street light is in the scene;
+      // the (much larger) city GLB fades in through the fog whenever it lands.
       await scene.whenReady();
       if (cancelled) return;
       setReady(true);

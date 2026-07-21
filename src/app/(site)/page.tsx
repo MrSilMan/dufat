@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import HeroSequence from "@/components/home/HeroSequence";
+import { SkylinePreload } from "@/components/home/SkylinePreload";
 import { WhyDufat } from "@/components/home/WhyDufat";
 import { CategoryGrid } from "@/components/home/CategoryGrid";
 import { Testimonials } from "@/components/home/Testimonials";
@@ -33,6 +34,7 @@ export default async function HomePage() {
 
   return (
     <>
+      <SkylinePreload />
       <HeroSequence
         eyebrow={settings.heroEyebrow}
         headline={settings.heroHeadline}

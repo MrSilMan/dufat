@@ -58,6 +58,10 @@ export function detectQuality(): QualityTier {
  *
  * Note: `deviceMemory` is reported rounded down to a power of two and capped at
  * 8, so a 6 GB machine reports 4. That is why it is not a threshold here.
+ *
+ * MUST stay in sync with the inline script in
+ * src/components/home/SkylinePreload.tsx, which duplicates this heuristic in
+ * the SSR HTML so the skyline download starts before hydration.
  */
 export function shouldLoadSkyline(): boolean {
   if (typeof window === "undefined") return false;

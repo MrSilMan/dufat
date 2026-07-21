@@ -15,7 +15,8 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
-        // The 3D assets are large (8–24 MB) and only change when the designer
+        // The 3D assets are the page's largest downloads (0.6–1.5 MB after
+        // scripts/optimize-glb.mjs) and only change when the designer
         // re-delivers — cache them hard so repeat visits skip the download.
         // NOTE: a re-delivered GLB must get a new filename (or the URL a
         // version suffix) to bust this cache.
