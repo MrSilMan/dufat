@@ -6,11 +6,13 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { invalidateCache } from "@/lib/redis";
-import { assertAdminRole, requireAdmin } from "@/lib/auth";
+import { assertAdminRole, requireAdmin, requireAdminRole } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
+import { isInvgestEnabled, invgestErrorMessage, listAllItems } from "@/lib/invgest";
 import { SETTINGS_CACHE_KEY, SETTINGS_ID } from "@/lib/settings";
 import {
   caseStudySchema,
+  NEW_CATEGORY_VALUE,
   parsePhonesText,
   parseSpecsText,
   parseStatsText,
@@ -87,12 +89,32 @@ export async function saveProduct(_prev: FormState, formData: FormData): Promise
   const { specsText, ...data } = result.data;
   const specs = parseSpecsText(specsText);
 
+  // "+ Nova categoria…" was chosen: create (or reuse, by slug) the category and
+  // point the product at it. The schema guarantees a non-empty name here.
+  let categoryId = data.categoryId;
+  if (categoryId === NEW_CATEGORY_VALUE) {
+    const name = (data.newCategoryName ?? "").trim();
+    const slug = slugifyCategory(name);
+    // New categories sort ahead of the "por-classificar" staging bucket (999).
+    const maxOrder = await prisma.category.aggregate({
+      _max: { sortOrder: true },
+      where: { slug: { not: "por-classificar" } },
+    });
+    const category = await prisma.category.upsert({
+      where: { slug },
+      update: {},
+      create: { slug, name, sortOrder: (maxOrder._max.sortOrder ?? 0) + 1 },
+      select: { id: true },
+    });
+    categoryId = category.id;
+  }
+
   const payload = {
     name: data.name,
     slug: data.slug,
     sku: data.sku || null,
     modelCode: data.modelCode || null,
-    categoryId: data.categoryId,
+    categoryId,
     shortDescription: data.shortDescription,
     description: data.description,
     heroImage: data.heroImage || null,
@@ -102,6 +124,7 @@ export async function saveProduct(_prev: FormState, formData: FormData): Promise
     featured: data.featured,
     published: data.published,
     has3dViewer: data.has3dViewer,
+    viewer3dVariant: data.viewer3dVariant || null,
   };
 
   try {
@@ -157,6 +180,198 @@ export async function deleteProduct(formData: FormData): Promise<void> {
   });
   logger.info("admin_product_deleted", { id, by: admin.email });
   revalidatePath("/admin/products");
+}
+
+/** Accent-stripped, URL-safe slug for an imported product name. */
+function slugifyProduct(input: string): string {
+  const slug = input
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return slug || "produto";
+}
+
+/** Accent-stripped, URL-safe slug for a new category name. */
+function slugifyCategory(input: string): string {
+  const slug = input
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return slug || "categoria";
+}
+
+/** A product slug that doesn't collide with an existing one. */
+async function uniqueProductSlug(name: string, fallback: string): Promise<string> {
+  const base = slugifyProduct(name);
+  const candidates = [base, `${base}-${slugifyProduct(fallback)}`];
+  for (const candidate of candidates) {
+    const taken = await prisma.product.findUnique({ where: { slug: candidate }, select: { id: true } });
+    if (!taken) return candidate;
+  }
+  for (let n = 2; n <= 1000; n++) {
+    const candidate = `${base}-${n}`;
+    const taken = await prisma.product.findUnique({ where: { slug: candidate }, select: { id: true } });
+    if (!taken) return candidate;
+  }
+  return `${base}-${Date.now()}`;
+}
+
+/**
+ * Import the INVGEST catalog into local products. INVGEST is the source of which
+ * products exist and their billing data (name + price); the rich showcase fields
+ * (category, images, specs, wattage/lumens, 3D) are enriched locally afterwards.
+ *
+ * Matched by invgestItemId: an existing link has its name/price refreshed; an
+ * unknown item becomes a new product in the "Por classificar" category, left
+ * UNPUBLISHED so bare imports never reach the public site before enrichment.
+ * Products not in INVGEST are left untouched. ADMIN-only.
+ */
+export async function importProductsFromInvgest(_prev: FormState, formData: FormData): Promise<FormState> {
+  const admin = await requireAdminRole();
+
+  if (!isInvgestEnabled()) {
+    return { ok: false, message: "A integração INVGEST não está configurada." };
+  }
+
+  // Optional subset controls: an INVGEST-side text filter and a hard cap on how
+  // many items to bring in. An empty "max" imports the whole catalog.
+  const search = String(formData.get("search") ?? "").trim().slice(0, 200) || undefined;
+  const maxRaw = Number(formData.get("max"));
+  const maxItems = Number.isFinite(maxRaw) && maxRaw >= 1 ? Math.min(Math.floor(maxRaw), 5000) : undefined;
+
+  try {
+    const items = await listAllItems({ search, maxItems });
+    if (items.length === 0) {
+      return {
+        ok: true,
+        message: search
+          ? `Sem artigos na INVGEST para o filtro “${search}”.`
+          : "O catálogo INVGEST está vazio — nada a importar.",
+      };
+    }
+
+    // Landing category for freshly imported products; re-classified in the admin.
+    const category = await prisma.category.upsert({
+      where: { slug: "por-classificar" },
+      update: {},
+      create: { slug: "por-classificar", name: "Por classificar", sortOrder: 999 },
+    });
+
+    let created = 0;
+    let updated = 0;
+    const now = new Date();
+
+    for (const item of items) {
+      const existing = await prisma.product.findFirst({
+        where: { invgestItemId: item.id },
+        select: { id: true },
+      });
+
+      // INVGEST items with a 0 price mean "no price defined" — keep those as
+      // null locally so the site shows "Preço sob consulta" instead of 0,00 Kz.
+      const priceKz = item.unitPrice > 0 ? item.unitPrice : null;
+
+      if (existing) {
+        await prisma.product.update({
+          where: { id: existing.id },
+          data: {
+            name: item.description,
+            priceKz,
+            invgestItemCode: item.code ?? null,
+            invgestSyncedAt: now,
+          },
+        });
+        updated++;
+      } else {
+        await prisma.product.create({
+          data: {
+            slug: await uniqueProductSlug(item.description, item.code ?? item.id),
+            name: item.description,
+            shortDescription: item.description,
+            description: item.description,
+            categoryId: category.id,
+            priceKz,
+            published: false,
+            invgestItemId: item.id,
+            invgestItemCode: item.code ?? null,
+            invgestSyncedAt: now,
+          },
+        });
+        created++;
+      }
+    }
+
+    await invalidateCatalog();
+    revalidatePath("/admin/products");
+
+    await recordAudit(admin, {
+      action: "product.invgest_imported",
+      entity: "Product",
+      summary: `Importou da INVGEST: ${created} criado(s), ${updated} atualizado(s)${search ? ` (filtro “${search}”)` : ""}.`,
+      meta: { created, updated, total: items.length, search: search ?? null, maxItems: maxItems ?? null },
+    });
+    logger.info("admin_products_invgest_imported", {
+      created,
+      updated,
+      total: items.length,
+      search,
+      maxItems,
+      by: admin.email,
+    });
+
+    return {
+      ok: true,
+      message:
+        `Importação concluída: ${created} criado(s), ${updated} atualizado(s).` +
+        (created > 0 ? " Os novos produtos ficam por publicar até serem completados." : ""),
+    };
+  } catch (error) {
+    logger.error("admin_products_invgest_import_failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return { ok: false, message: invgestErrorMessage(error) };
+  }
+}
+
+/**
+ * Remove the LOCAL link between a product and its INVGEST item. This does NOT
+ * delete anything in INVGEST — items cannot be deleted via the API — it only
+ * clears the stored id/code so the product can be synced again (which would
+ * create a fresh INVGEST item). ADMIN-only.
+ */
+export async function unsyncProductFromInvgest(formData: FormData): Promise<void> {
+  const admin = await requireAdminRole();
+  const id = (formData.get("id") as string) || "";
+  if (!id) return;
+
+  const product = await prisma.product.findUnique({
+    where: { id },
+    select: { id: true, name: true, invgestItemId: true, invgestItemCode: true },
+  });
+  if (!product || !product.invgestItemId) return;
+
+  await prisma.product.update({
+    where: { id: product.id },
+    data: { invgestItemId: null, invgestItemCode: null, invgestSyncedAt: null },
+  });
+
+  await recordAudit(admin, {
+    action: "product.invgest_unlinked",
+    entity: "Product",
+    entityId: product.id,
+    summary: `Desassociou “${product.name}” da INVGEST (o artigo ${product.invgestItemCode ?? product.invgestItemId} permanece na INVGEST).`,
+    meta: { invgestItemId: product.invgestItemId, invgestItemCode: product.invgestItemCode },
+  });
+  logger.info("admin_product_invgest_unlinked", { id: product.id, by: admin.email });
+
+  revalidatePath("/admin/products");
+  revalidatePath(`/admin/products/${product.id}/edit`);
 }
 
 // ---------- Case studies ----------

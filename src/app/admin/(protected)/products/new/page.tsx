@@ -5,7 +5,10 @@ import { PageHeader } from "@/components/admin/ui";
 export const dynamic = "force-dynamic";
 
 export default async function NewProductPage() {
+  // Exclude the "por-classificar" INVGEST staging bucket — a hand-created product
+  // should be filed under a real category, not the import landing spot.
   const categories = await prisma.category.findMany({
+    where: { slug: { not: "por-classificar" } },
     orderBy: { sortOrder: "asc" },
     select: { id: true, name: true },
   });

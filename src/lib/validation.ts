@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TURNTABLE_VARIANTS } from "@/lib/three/showcaseVariants";
 
 // ---------- Public forms ----------
 
@@ -59,6 +60,12 @@ const optionalNumber = (max: number, label: string, int = false) => {
     .optional();
 };
 
+/**
+ * Sentinel `categoryId` posted when the admin picks "+ Nova categoria…" in the
+ * product form. The save action creates the category from `newCategoryName`.
+ */
+export const NEW_CATEGORY_VALUE = "__new__";
+
 export const productSchema = z.object({
   name: z
     .string()
@@ -74,6 +81,13 @@ export const productSchema = z.object({
     .optional()
     .or(z.literal("")),
   categoryId: z.string().min(1, "Escolha uma categoria"),
+  /** Set only when categoryId is NEW_CATEGORY_VALUE — the name for the category to create. */
+  newCategoryName: z
+    .string()
+    .trim()
+    .max(80, "Nome da categoria demasiado longo (máx. 80 caracteres)")
+    .optional()
+    .or(z.literal("")),
   shortDescription: z
     .string()
     .trim()
@@ -101,12 +115,26 @@ export const productSchema = z.object({
   featured: z.coerce.boolean().default(false),
   published: z.coerce.boolean().default(true),
   has3dViewer: z.coerce.boolean().default(false),
+  /** Empty = fall back to the category's model. */
+  viewer3dVariant: z
+    .enum(TURNTABLE_VARIANTS, { message: "Modelo 3D desconhecido" })
+    .optional()
+    .or(z.literal("")),
   /** One spec per line: "Grupo | Etiqueta | Valor" */
   specsText: z
     .string()
     .max(20_000, "Especificações demasiado longas (máx. 20000 caracteres)")
     .optional()
     .or(z.literal("")),
+}).superRefine((data, ctx) => {
+  // "+ Nova categoria…" requires a name to create the category from.
+  if (data.categoryId === NEW_CATEGORY_VALUE && !data.newCategoryName) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["newCategoryName"],
+      message: "Indique o nome da nova categoria",
+    });
+  }
 });
 
 export const caseStudySchema = z.object({

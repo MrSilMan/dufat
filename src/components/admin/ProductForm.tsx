@@ -1,8 +1,12 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { saveProduct } from "@/server/actions/admin";
-import { initialFormState } from "@/lib/validation";
+import { initialFormState, NEW_CATEGORY_VALUE } from "@/lib/validation";
+import {
+  TURNTABLE_VARIANTS,
+  TURNTABLE_VARIANT_LABELS,
+} from "@/lib/three/showcaseVariants";
 import { AdminField, FormSection, adminInputClass } from "@/components/admin/ui";
 import { ImageUploadField } from "@/components/admin/ImageUploadField";
 
@@ -24,6 +28,7 @@ type ProductData = {
   featured: boolean;
   published: boolean;
   has3dViewer: boolean;
+  viewer3dVariant: string | null;
   specsText: string;
 };
 
@@ -31,9 +36,21 @@ const toggleClass = "toggle-pill";
 
 export function ProductForm({ categories, product }: { categories: Category[]; product?: ProductData }) {
   const [state, action, pending] = useActionState(saveProduct, initialFormState);
+  // Drives the model picker's hint — the 3D viewer is opt-in per product.
+  const [show3d, setShow3d] = useState(product?.has3dViewer ?? false);
+  // Controls the inline "+ Nova categoria" name field.
+  const [categoryValue, setCategoryValue] = useState(product?.categoryId ?? "");
 
   return (
-    <form action={action} className="max-w-3xl space-y-6" noValidate>
+    // Cancel React 19's automatic post-action form reset so a validation error
+    // keeps every field the admin typed — including the "+ Nova categoria"
+    // selection and name — instead of silently reverting them.
+    <form
+      action={action}
+      onReset={(event) => event.preventDefault()}
+      className="max-w-3xl space-y-6"
+      noValidate
+    >
       {product && <input type="hidden" name="id" value={product.id} />}
 
       <FormSection title="Identificação" description="Nome público, endereço e classificação do produto.">
@@ -57,7 +74,8 @@ export function ProductForm({ categories, product }: { categories: Category[]; p
             <select
               id="p-category"
               name="categoryId"
-              defaultValue={product?.categoryId ?? ""}
+              value={categoryValue}
+              onChange={(event) => setCategoryValue(event.target.value)}
               required
               className={adminInputClass}
             >
@@ -69,9 +87,26 @@ export function ProductForm({ categories, product }: { categories: Category[]; p
                   {category.name}
                 </option>
               ))}
+              <option value={NEW_CATEGORY_VALUE}>+ Nova categoria…</option>
             </select>
           </AdminField>
         </div>
+
+        {categoryValue === NEW_CATEGORY_VALUE && (
+          <AdminField
+            label="Nome da nova categoria"
+            htmlFor="p-new-category"
+            errors={state.errors?.newCategoryName}
+            hint="Será criada e atribuída a este produto ao guardar."
+          >
+            <input
+              id="p-new-category"
+              name="newCategoryName"
+              autoFocus
+              className={adminInputClass}
+            />
+          </AdminField>
+        )}
       </FormSection>
 
       <FormSection title="Conteúdo" description="Textos e imagem apresentados na página do produto.">
@@ -160,7 +195,6 @@ export function ProductForm({ categories, product }: { categories: Category[]; p
             [
               ["featured", "Destaque", product?.featured ?? false],
               ["published", "Publicado", product?.published ?? true],
-              ["has3dViewer", "Visualizador 3D", product?.has3dViewer ?? false],
             ] as const
           ).map(([name, label, checked]) => (
             <label key={name} className={toggleClass}>
@@ -173,7 +207,45 @@ export function ProductForm({ categories, product }: { categories: Category[]; p
               {label}
             </label>
           ))}
+          <label className={toggleClass}>
+            <input
+              type="checkbox"
+              name="has3dViewer"
+              checked={show3d}
+              onChange={(event) => setShow3d(event.target.checked)}
+              className="h-4 w-4 accent-dufat-bright"
+            />
+            Visualizador 3D
+          </label>
         </fieldset>
+
+        <AdminField
+          label="Modelo 3D"
+          htmlFor="p-viewer3d"
+          errors={state.errors?.viewer3dVariant}
+          optional
+          hint={
+            show3d
+              ? "O modelo mostrado no cartão e na página do produto, em vez da imagem."
+              : "Ative “Visualizador 3D” para mostrar um modelo — caso contrário o produto usa a imagem principal."
+          }
+        >
+          <select
+            id="p-viewer3d"
+            name="viewer3dVariant"
+            defaultValue={product?.viewer3dVariant ?? ""}
+            // Never disabled: a disabled select submits nothing, which would
+            // silently clear the stored model whenever 3D is toggled off.
+            className={`${adminInputClass} max-w-sm ${show3d ? "" : "opacity-60"}`}
+          >
+            <option value="">Automático (pela categoria)</option>
+            {TURNTABLE_VARIANTS.map((variant) => (
+              <option key={variant} value={variant}>
+                {TURNTABLE_VARIANT_LABELS[variant]}
+              </option>
+            ))}
+          </select>
+        </AdminField>
       </FormSection>
 
       <div className="flex flex-wrap items-center justify-between gap-4">

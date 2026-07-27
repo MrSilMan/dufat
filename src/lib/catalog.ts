@@ -17,6 +17,7 @@ export type ProductCard = {
   lumens: number | null;
   featured: boolean;
   has3dViewer: boolean;
+  viewer3dVariant: string | null;
   category: { slug: string; name: string };
 };
 
@@ -34,6 +35,7 @@ function toCard(product: {
   lumens: number | null;
   featured: boolean;
   has3dViewer: boolean;
+  viewer3dVariant: string | null;
   category: { slug: string; name: string };
 }): ProductCard {
   return {
@@ -55,6 +57,7 @@ const cardSelect = {
   lumens: true,
   featured: true,
   has3dViewer: true,
+  viewer3dVariant: true,
   category: { select: { slug: true, name: true } },
 } satisfies Prisma.ProductSelect;
 
@@ -131,13 +134,18 @@ export async function listCategories() {
         _count: { select: { products: { where: { published: true } } } },
       },
     });
-    return categories.map((category) => ({
-      id: category.id,
-      slug: category.slug,
-      name: category.name,
-      description: category.description,
-      productCount: category._count.products,
-    }));
+    return categories
+      // Only expose categories that actually have published products. This keeps
+      // staging buckets like "por-classificar" (whose imports stay unpublished
+      // until enriched) out of the public filter bar.
+      .filter((category) => category._count.products > 0)
+      .map((category) => ({
+        id: category.id,
+        slug: category.slug,
+        name: category.name,
+        description: category.description,
+        productCount: category._count.products,
+      }));
   });
 }
 
