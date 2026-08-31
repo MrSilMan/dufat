@@ -282,9 +282,22 @@ export class HeroScene {
         metalness: 0.75,
         roughness: 0.25,
         envMapIntensity: 1.6,
+        // The skyline GLB (v4) flattened its grass "Ground" to a quad at
+        // y≈−0.003 — effectively coplanar with this backdrop. Push the
+        // backdrop away in the depth buffer so the GLB terrain wins the depth
+        // test at every distance instead of z-fighting (grass shimmering in
+        // and out as the camera moves on scroll).
+        polygonOffset: true,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 2,
       }),
     );
     this.groundMesh.rotation.x = -Math.PI / 2;
+    // Also sink it geometrically below the GLB grass plane: polygonOffset
+    // units only cover ~1–2 depth ULPs, which at near range (< ~70 m) is less
+    // than the 3 mm the grass sits below y=0. Both together keep the grass on
+    // top from the verge to the horizon.
+    this.groundMesh.position.y = -0.05;
     this.scene.add(this.groundMesh);
 
     // Lane markings centred on the road under the lamp.

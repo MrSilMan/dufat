@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
-import { requireAdmin } from "@/lib/auth";
+import { requireCatalogo } from "@/lib/auth";
 import { isInvgestEnabled } from "@/lib/invgest";
 import { ProductForm } from "@/components/admin/ProductForm";
 import { InvgestOrigin } from "@/components/admin/InvgestOrigin";
@@ -12,7 +12,7 @@ type Props = { params: Promise<{ id: string }> };
 
 export default async function EditProductPage({ params }: Props) {
   const { id } = await params;
-  const session = await requireAdmin();
+  const session = await requireCatalogo();
   const [product, allCategories] = await Promise.all([
     prisma.product.findUnique({
       where: { id },

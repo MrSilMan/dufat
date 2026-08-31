@@ -237,6 +237,18 @@ export default function HeroSequence({
                 {[headline, highlight].filter(Boolean).join(" ")}
               </h1>
               <p className="mt-3 max-w-xl text-white/70">{subtitle}</p>
+              {/* The reduced-motion path gets the same two entry points. */}
+              <div className="mt-6 flex flex-wrap gap-3">
+                <Link href="/products" className="btn-primary px-7 py-3.5">
+                  Ver catálogo
+                </Link>
+                <Link
+                  href="/contact?tab=orcamento"
+                  className="inline-flex items-center justify-center rounded-full border border-white/60 px-7 py-3.5 font-semibold text-white transition-colors duration-300 hover:border-white hover:bg-white/10"
+                >
+                  Pedir orçamento
+                </Link>
+              </div>
             </div>
           </div>
         </div>
@@ -328,13 +340,39 @@ export default function HeroSequence({
             )}
           </h1>
           <p className="mt-4 max-w-xl px-6 text-base text-white/70 md:text-lg">{subtitle}</p>
-          <div className="mt-10 flex flex-col items-center gap-2 text-dufat-sky/80">
+
+          {/* Business first: the teardown is 680vh long, so the two things a
+              visitor might actually want must be reachable before any of it. */}
+          <div className="mt-8 flex flex-wrap items-center justify-center gap-3 px-6">
+            <Link href="/products" className="btn-primary px-7 py-3.5">
+              Ver catálogo
+            </Link>
+            <Link
+              href="/contact?tab=orcamento"
+              className="inline-flex items-center justify-center rounded-full border border-white/60 px-7 py-3.5 font-semibold text-white transition-colors duration-300 hover:border-white hover:bg-white/10"
+            >
+              Pedir orçamento
+            </Link>
+          </div>
+
+          <div className="mt-8 flex flex-col items-center gap-2 text-dufat-sky/80">
             <span className="text-xs uppercase tracking-[0.3em]">{scrollHint}</span>
             <span aria-hidden className="block h-9 w-5 rounded-full border border-dufat-sky/50 p-1">
               <span className="block h-2 w-full animate-bounce rounded-full bg-dufat-sky" />
             </span>
           </div>
         </div>
+
+        {/* Escape hatch for the whole sequence. Outside the intro block, so it
+            survives the fade at 7% and stays reachable for all 680vh. Anchored
+            bottom-left to clear the floating WhatsApp button. */}
+        <a
+          href="#catalogo"
+          className="absolute bottom-6 left-5 z-20 inline-flex items-center gap-2 rounded-full border border-white/25 bg-night-soft/60 px-4 py-2 text-xs font-semibold text-white/80 backdrop-blur-sm transition-colors hover:border-white/60 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-lumen md:left-8"
+        >
+          Saltar para os produtos
+          <span aria-hidden>↓</span>
+        </a>
 
         {/* Stage progress rail */}
         <div
@@ -400,7 +438,13 @@ export default function HeroSequence({
             <Link href="/products" className="btn-primary px-8 py-3.5">
               Ver catálogo
             </Link>
-            <Link href="/contact?tab=orcamento" className="btn-ghost px-8 py-3.5">
+            {/* Not btn-ghost: that utility is a dark-blue outline for light
+                pages and disappears against this dark hero. Explicit white pill
+                so it reads next to the blue primary. */}
+            <Link
+              href="/contact?tab=orcamento"
+              className="inline-flex items-center justify-center gap-2 rounded-full border border-white/60 px-8 py-3.5 font-semibold text-white transition-colors duration-300 hover:border-white hover:bg-white/10"
+            >
               Pedir orçamento
             </Link>
           </div>

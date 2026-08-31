@@ -79,7 +79,9 @@ export function ThemeToggle({ variant = "full", className }: Props) {
         title={nextLabel}
         aria-label={nextLabel}
         className={cn(
-          "flex h-8 w-8 items-center justify-center rounded-lg text-a-muted transition-colors hover:bg-a-hover hover:text-a-text",
+          // 44px on the phone, where this variant lives in a touch header;
+          // compact again from `sm:` up.
+          "flex h-11 w-11 items-center justify-center rounded-lg text-a-muted transition-colors hover:bg-a-hover hover:text-a-text sm:h-8 sm:w-8",
           className,
         )}
       >

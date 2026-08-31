@@ -18,7 +18,7 @@ import { RoleSelect } from "@/components/admin/RoleSelect";
 import { IconUsers } from "@/components/admin/icons";
 
 export const metadata: Metadata = {
-  title: "Equipa",
+  title: "Contas e acessos",
   robots: { index: false },
 };
 
@@ -67,14 +67,31 @@ export default async function AdminTeamPage() {
     prisma.user.count({ where: { role: "ADMIN", active: true } }),
   ]);
 
+  const [cargos, departamentos] = await Promise.all([
+    prisma.cargo.findMany({
+      where: { ativo: true },
+      orderBy: { nome: "asc" },
+      select: { id: true, nome: true },
+    }),
+    prisma.departamento.findMany({
+      where: { ativo: true },
+      orderBy: { sortOrder: "asc" },
+      select: { id: true, nome: true },
+    }),
+  ]);
+
   return (
     <div className="space-y-8">
       <PageHeader
-        title="Equipa"
+        title="Contas e acessos"
         description="Convide colegas e faça a gestão das permissões de acesso ao painel."
       />
 
-      <InviteForm mailConfigured={isMailConfigured()} />
+      <InviteForm
+        mailConfigured={isMailConfigured()}
+        cargos={cargos}
+        departamentos={departamentos}
+      />
 
       {invites.length > 0 && (
         <section aria-labelledby="invites-title">

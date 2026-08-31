@@ -28,6 +28,8 @@ type ProductInput = {
   lumens?: number;
   featured?: boolean;
   has3dViewer?: boolean;
+  /** TurntableVariant staged instead of the photo — see showcaseVariants.ts. */
+  viewer3dVariant?: string;
   category: string;
   specs: SpecInput[];
 };
@@ -201,6 +203,9 @@ const products: ProductInput[] = [
       "Postes cilíndricos em aço galvanizado a quente, ideais para iluminação urbana e decorativa. Disponíveis de 2 a 12 metros, com portinhola de inspeção e fixação por flange e chumbadores.",
     heroImage: "/images/products/poste-cilindrico.svg",
     priceKz: "55000.00",
+    // The pole cut out of candeeiro.glb is exactly this product.
+    has3dViewer: true,
+    viewer3dVariant: "pole",
     category: "postes-e-bracos",
     specs: [
       { group: "Material e Acabamento", label: "Secção", value: "Cilíndrica" },
@@ -227,6 +232,9 @@ const products: ProductInput[] = [
       "Braço simples em aço galvanizado com inclinação de 15°, para montagem de uma luminária por poste. Disponível em três comprimentos, com abraçadeiras de fixação incluídas.",
     heroImage: "/images/products/braco-simples.svg",
     priceKz: "25000.00",
+    // The single arm cut out of candeeiro.glb.
+    has3dViewer: true,
+    viewer3dVariant: "arm",
     category: "postes-e-bracos",
     specs: [
       { group: "Características", label: "Inclinação", value: "15°" },

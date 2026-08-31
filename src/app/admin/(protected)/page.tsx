@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
+import { requireAdmin } from "@/lib/auth";
 import { formatDate } from "@/lib/format";
 import { PageHeader, StatusBadge, EmptyState } from "@/components/admin/ui";
 import { IconBook, IconBox, IconInbox, IconMail, IconUsers } from "@/components/admin/icons";
@@ -9,6 +10,8 @@ export const dynamic = "force-dynamic";
 type DayCount = { day: Date; views: bigint };
 
 export default async function AdminDashboardPage() {
+  await requireAdmin();
+
   const since = new Date();
   since.setDate(since.getDate() - 13);
   since.setHours(0, 0, 0, 0);

@@ -16,6 +16,8 @@ export type AuditAction =
   | "product.created"
   | "product.updated"
   | "product.deleted"
+  | "product.invgest_imported"
+  | "product.invgest_unlinked"
   | "case_study.created"
   | "case_study.updated"
   | "case_study.deleted"
@@ -26,7 +28,29 @@ export type AuditAction =
   | "invite.accepted"
   | "user.role_changed"
   | "user.deactivated"
-  | "user.reactivated";
+  | "user.reactivated"
+  | "colaborador.atualizado"
+  | "atividade.validada"
+  | "atividade.questionada"
+  | "atividade.rejeitada"
+  | "atividade.reaberta"
+  | "folha.submetida"
+  | "folha.fechada"
+  | "folha.fechada_lote"
+  | "folha.reaberta"
+  | "premio.calculado"
+  | "premio.confirmado"
+  | "premio.reaberto"
+  | "premio.definicoes_alteradas"
+  | "organizacao.cargo_criado"
+  | "organizacao.cargo_atualizado"
+  | "organizacao.cargo_desativado"
+  | "organizacao.departamento_criado"
+  | "organizacao.departamento_atualizado"
+  | "organizacao.departamento_desativado"
+  | "organizacao.categoria_criada"
+  | "organizacao.categoria_atualizada"
+  | "organizacao.categoria_desativada";
 
 /** Portuguese labels for the audit table and its filter dropdown. */
 export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
@@ -36,6 +60,8 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "product.created": "Criou produto",
   "product.updated": "Editou produto",
   "product.deleted": "Apagou produto",
+  "product.invgest_imported": "Importou produtos da INVGEST",
+  "product.invgest_unlinked": "Desassociou produto da INVGEST",
   "case_study.created": "Criou caso de estudo",
   "case_study.updated": "Editou caso de estudo",
   "case_study.deleted": "Apagou caso de estudo",
@@ -47,6 +73,28 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "user.role_changed": "Alterou permissões",
   "user.deactivated": "Desativou utilizador",
   "user.reactivated": "Reativou utilizador",
+  "colaborador.atualizado": "Atualizou ficha de colaborador",
+  "atividade.validada": "Validou atividade",
+  "atividade.questionada": "Pediu justificação de atividade",
+  "atividade.rejeitada": "Rejeitou atividade",
+  "atividade.reaberta": "Reabriu atividade",
+  "folha.submetida": "Submeteu folha de atividade",
+  "folha.fechada": "Fechou folha de atividade",
+  "folha.fechada_lote": "Fechou folhas do mês em lote",
+  "folha.reaberta": "Reabriu folha de atividade",
+  "premio.calculado": "Calculou ranking do prémio",
+  "premio.confirmado": "Confirmou vencedor do prémio",
+  "premio.reaberto": "Reabriu período do prémio",
+  "premio.definicoes_alteradas": "Alterou parâmetros do prémio",
+  "organizacao.cargo_criado": "Criou cargo",
+  "organizacao.cargo_atualizado": "Editou cargo",
+  "organizacao.cargo_desativado": "Desativou cargo",
+  "organizacao.departamento_criado": "Criou departamento",
+  "organizacao.departamento_atualizado": "Editou departamento",
+  "organizacao.departamento_desativado": "Desativou departamento",
+  "organizacao.categoria_criada": "Criou categoria de atividade",
+  "organizacao.categoria_atualizada": "Editou categoria de atividade",
+  "organizacao.categoria_desativada": "Desativou categoria de atividade",
 };
 
 /** Groups actions for the audit page's category filter. */
@@ -56,6 +104,8 @@ export const AUDIT_GROUPS: Record<string, AuditAction[]> = {
     "product.created",
     "product.updated",
     "product.deleted",
+    "product.invgest_imported",
+    "product.invgest_unlinked",
     "case_study.created",
     "case_study.updated",
     "case_study.deleted",
@@ -69,6 +119,34 @@ export const AUDIT_GROUPS: Record<string, AuditAction[]> = {
     "user.role_changed",
     "user.deactivated",
     "user.reactivated",
+    "colaborador.atualizado",
+  ],
+  "Folhas de atividade": [
+    "atividade.validada",
+    "atividade.questionada",
+    "atividade.rejeitada",
+    "atividade.reaberta",
+    "folha.submetida",
+    "folha.fechada",
+    "folha.fechada_lote",
+    "folha.reaberta",
+  ],
+  Prémios: [
+    "premio.calculado",
+    "premio.confirmado",
+    "premio.reaberto",
+    "premio.definicoes_alteradas",
+  ],
+  Organização: [
+    "organizacao.cargo_criado",
+    "organizacao.cargo_atualizado",
+    "organizacao.cargo_desativado",
+    "organizacao.departamento_criado",
+    "organizacao.departamento_atualizado",
+    "organizacao.departamento_desativado",
+    "organizacao.categoria_criada",
+    "organizacao.categoria_atualizada",
+    "organizacao.categoria_desativada",
   ],
 };
 

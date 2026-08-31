@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { requireCatalogo } from "@/lib/auth";
 import { updateQuoteStatus } from "@/server/actions/admin";
 import { formatDate } from "@/lib/format";
 import { PageHeader, StatusBadge, EmptyState, adminInputClass } from "@/components/admin/ui";
@@ -14,6 +15,7 @@ const statusOptions = [
 ];
 
 export default async function AdminQuotesPage() {
+  await requireCatalogo();
   const quotes = await prisma.quoteRequest.findMany({
     orderBy: { createdAt: "desc" },
     include: { product: { select: { name: true } } },

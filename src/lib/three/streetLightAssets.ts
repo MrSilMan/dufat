@@ -2,11 +2,12 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 import { SKYLINE_URL, STREET_LIGHT_URL } from "./assetUrls";
+import { isLitVariant } from "./showcaseVariants";
 
 /**
  * Loaders + integration patches for the designer-delivered GLB assets:
  *
- *  - /dufat-3d-assets/candeeiro.v2.glb    — the hero street light, six named parts
+ *  - /dufat-3d-assets/candeeiro.v3.glb    — the hero street light, six named parts
  *    (head / arm / pole / base / door / ledpanel), geometry world-baked in
  *    meters: pole base ~y0.42, luminaire head ~y8.5.
  *  - /dufat-3d-assets/skyline_far.glb  — full night environment: textured
@@ -157,7 +158,17 @@ export async function loadStreetLight(): Promise<StreetLightAsset> {
   };
 }
 
-export type TurntableVariant = "head" | "full" | "bollard" | "accessories";
+/**
+ * What a turntable shows:
+ *  - "full"                        — the complete street light;
+ *  - "head" / "arm" / "pole" /
+ *    "base" / "door"               — one named part cut out of candeeiro.glb,
+ *                                    so components sold separately (braço,
+ *                                    poste, chapelim, portinhola) get their own
+ *                                    model instead of the whole assembly;
+ *  - "bollard" / "accessories"     — procedural showcase products.
+ */
+export type TurntableVariant = PartName | "full" | "bollard" | "accessories";
 
 export type TurntableAsset = {
   /** Model recentred at the origin, ready for a turntable pivot. */
@@ -221,10 +232,11 @@ function recentreForTurntable(
 }
 
 /**
- * A product model re-staged for turntables: the ST89 luminaire head alone
- * ("head"), the complete street light ("full") — both cut from candeeiro.glb,
- * whose geometry bakes world position (~x1.6, y8.5) — or one of the procedural
- * showcase products ("bollard", "accessories"). Always recentred on the origin.
+ * A product model re-staged for turntables: the complete street light ("full"),
+ * a single part of it ("head", "arm", "pole", "base", "door" — candeeiro.glb
+ * bakes world position into its geometry, ~x1.6/y8.5 for the head, so a cut-out
+ * part has to be recentred), or one of the procedural showcase products
+ * ("bollard", "accessories"). Always recentred on the origin.
  */
 export async function loadTurntable(variant: TurntableVariant = "head"): Promise<TurntableAsset> {
   if (variant === "bollard" || variant === "accessories") {
@@ -236,23 +248,34 @@ export async function loadTurntable(variant: TurntableVariant = "head"): Promise
   const asset = await loadStreetLight();
   const ledPanel = asset.root.getObjectByName("ledpanel")!;
 
+  if (variant === "full") {
+    const inner = new THREE.Group();
+    inner.add(asset.root);
+    // The full lamp turns around its own pole axis.
+    return recentreForTurntable(inner, asset.ledMaterial, asset.lampAnchor, "origin");
+  }
+
+  // One part, cut out of the assembly: reparenting it here leaves the rest of
+  // the street light out of the scene but still holding geometry and textures,
+  // so the remainder is disposed alongside the turntable.
   const inner = new THREE.Group();
+  const lit = isLitVariant(variant);
   if (variant === "head") {
     inner.add(asset.parts.head, ledPanel);
   } else {
-    inner.add(asset.root);
+    inner.add(asset.parts[variant]);
   }
-  return recentreForTurntable(
-    inner,
-    asset.ledMaterial,
-    asset.lampAnchor,
-    // The full lamp turns around its own pole axis; the head lives at world
-    // x≈1.6 so it must centre on its bounding box instead.
-    variant === "head" ? "bbox" : "origin",
-    // In "head" mode the rest of the street light (pole, base…) never joined
-    // a scene but still owns geometry and textures.
-    variant === "head" ? () => disposeObject3D(asset.root) : undefined,
-  );
+
+  // An unlit part has no LED panel. Give the stage a detached material so the
+  // on/off tween has a harmless target, and anchor the (zero-sized) glow on the
+  // part itself rather than on the luminaire it was cut away from.
+  const ledMaterial = lit ? asset.ledMaterial : new THREE.MeshStandardMaterial();
+  const lampAnchor = lit ? asset.lampAnchor : computeAnchor(inner);
+
+  return recentreForTurntable(inner, ledMaterial, lampAnchor, "bbox", () => {
+    disposeObject3D(asset.root);
+    if (!lit) ledMaterial.dispose();
+  });
 }
 
 export async function loadSkyline(maxAnisotropy = 4): Promise<SkylineAsset> {

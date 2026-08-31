@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { gsap, useGSAP, prefersReducedMotion } from "@/lib/gsap";
 import { cn } from "@/lib/cn";
+import { isLitVariant } from "@/lib/three/showcaseVariants";
 import type { TurntableVariant } from "@/lib/three/streetLightAssets";
 
 /**
@@ -31,6 +32,9 @@ export function ProductViewer360({
   });
   const [ready, setReady] = useState(false);
   const [ledOn, setLedOn] = useState(true);
+  // Parts sold on their own (braço, poste, base, portinhola) carry no LED —
+  // the photocell switch would toggle nothing.
+  const lit = isLitVariant(variant);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -144,7 +148,7 @@ export function ProductViewer360({
         <div
           className={cn(
             "absolute inset-x-[22%] bottom-[7%] h-14 rounded-[100%] bg-lumen/30 blur-2xl transition-opacity duration-700",
-            ledOn ? "opacity-100" : "opacity-0",
+            ledOn && lit ? "opacity-100" : "opacity-0",
           )}
         />
       </div>
@@ -169,7 +173,8 @@ export function ProductViewer360({
         </div>
       )}
 
-      {/* LED photocell switch */}
+      {/* LED photocell switch — only where there is an LED to switch */}
+      {lit && (
       <button
         type="button"
         onClick={toggleLed}
@@ -190,7 +195,7 @@ export function ProductViewer360({
         />
         LED {ledOn ? "ON" : "OFF"}
       </button>
-
+      )}
     </div>
   );
 }

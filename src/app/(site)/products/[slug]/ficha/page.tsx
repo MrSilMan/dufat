@@ -57,8 +57,8 @@ export default async function FichaTecnicaPage({ params }: Props) {
             </p>
           </div>
           {product.heroImage && (
-            <div className="relative h-32 w-44 shrink-0 overflow-hidden rounded-lg border border-slate-200">
-              <Image src={product.heroImage} alt={product.name} fill className="object-cover" />
+            <div className="relative h-32 w-44 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-white">
+              <Image src={product.heroImage} alt={product.name} fill className="object-contain p-2" />
             </div>
           )}
         </div>

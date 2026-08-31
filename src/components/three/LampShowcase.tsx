@@ -24,6 +24,12 @@ type Props = {
 const CARD_ZOOM: Record<TurntableVariant, number> = {
   head: 1.28,
   full: 1.12,
+  // The parts are wide (arm, base) or very tall (pole) — a card is 4:3, so
+  // they need looser framing than the luminaire head to stay uncropped.
+  arm: 1,
+  pole: 1.05,
+  base: 1.15,
+  door: 1.15,
   bollard: 0.92,
   accessories: 1.5,
 };

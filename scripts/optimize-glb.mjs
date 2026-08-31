@@ -36,11 +36,11 @@ const ASSET_DIR = path.join(process.cwd(), "public", "dufat-3d-assets");
 // higher texture quality; the skyline is set dressing seen through fog at
 // distance. The split costs ~250 KB and keeps the LED diode grid crisp.
 const SOURCES = [
-  { name: "candeeiro", quality: 95, version: "v2" },
+  { name: "candeeiro", quality: 95, version: "v3" },
   {
     name: "skyline_far",
     quality: 85,
-    version: "v3",
+    version: "v4",
     // The tiled ground PBR sets (grass verge, road, paving, metal) were
     // ~1.7 MB of the 2.8 MB file at 1K, yet they repeat many times across the
     // terrain, so 512 px keeps their on-screen texel density fine at night.

@@ -69,7 +69,10 @@ export const DEFAULT_SETTINGS: SiteSettings = {
   facebookUrl: null,
   instagramUrl: null,
   linkedinUrl: null,
-  whatsappUrl: null,
+  // Unlike the other socials this ships with a value: WhatsApp is the sales
+  // channel, and the floating button must work before anyone opens the admin.
+  // It is the first number in footerPhones; override it in Definições.
+  whatsappUrl: "https://wa.me/244922293111",
 };
 
 /** Treats "" and null alike: an unset field always yields the default. */

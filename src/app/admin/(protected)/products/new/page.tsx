@@ -1,10 +1,12 @@
 import { prisma } from "@/lib/db";
+import { requireCatalogo } from "@/lib/auth";
 import { ProductForm } from "@/components/admin/ProductForm";
 import { PageHeader } from "@/components/admin/ui";
 
 export const dynamic = "force-dynamic";
 
 export default async function NewProductPage() {
+  await requireCatalogo();
   // Exclude the "por-classificar" INVGEST staging bucket — a hand-created product
   // should be filed under a real category, not the import landing spot.
   const categories = await prisma.category.findMany({

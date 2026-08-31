@@ -63,6 +63,14 @@ const STAGING: Record<TurntableVariant, VariantStaging> = {
   // Complete street light: level camera, beam + pool sell the night scene and
   // silhouette the pole; rim light keeps the shaft legible.
   full: { camY: 0.05, camZ: 1.2, tilt: 0.03, core: 0.12, corona: 0.24, coronaOpacity: 0.4, lampLightMax: 40, beam: true, pool: true, shadowScale: 0.1 },
+  // ----- components sold on their own, cut out of the assembly -----
+  // No LED (glow sprites and lamp fill scale to nothing), clean studio framing.
+  // The arm hangs in the air, so it gets no contact shadow; pole, base and door
+  // stand on the ground plane and do.
+  arm: { camY: 0.12, camZ: 1.16, tilt: 0.06, core: 0, corona: 0, coronaOpacity: 0, lampLightMax: 0 },
+  pole: { camY: 0.05, camZ: 1.2, tilt: 0.02, core: 0, corona: 0, coronaOpacity: 0, lampLightMax: 0, shadowScale: 0.06 },
+  base: { camY: 0.3, camZ: 1.14, tilt: 0.06, core: 0, corona: 0, coronaOpacity: 0, lampLightMax: 0, shadowScale: 0.4 },
+  door: { camY: 0.14, camZ: 1.18, tilt: 0.04, core: 0, corona: 0, coronaOpacity: 0, lampLightMax: 0, shadowScale: 0.3 },
   // Bollard: warm 360° diffuser, soft pool at the flange.
   bollard: { camY: 0.12, camZ: 1.18, tilt: 0.05, core: 0.22, corona: 0.6, coronaOpacity: 0.3, lampLightMax: 2.5, pool: true, shadowScale: 0.17 },
   // Accessories kit: viewed from above, only the photocell dome glows.

@@ -27,7 +27,7 @@ ENV PORT=3000
 
 RUN addgroup --system --gid 1001 nodejs \
   && adduser --system --uid 1001 nextjs \
-  && mkdir -p /app/logs /app/public/uploads \
+  && mkdir -p /app/logs /app/var/uploads \
   && chown -R nextjs:nodejs /app
 
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./

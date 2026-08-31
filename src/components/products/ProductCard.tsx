@@ -3,7 +3,7 @@ import Link from "next/link";
 import type { ProductCard as ProductCardData } from "@/lib/catalog";
 import { formatKz } from "@/lib/format";
 import { LampShowcase } from "@/components/three/LampShowcase";
-import { SHOWCASE_VARIANT_BY_CATEGORY } from "@/lib/three/showcaseVariants";
+import { resolveProductVariant } from "@/lib/three/showcaseVariants";
 
 /** Deterministic per-product rotation offset so equal models don't spin in lockstep. */
 function slugPhase(slug: string): number {
@@ -13,13 +13,23 @@ function slugPhase(slug: string): number {
 }
 
 export function ProductCard({ product, className }: { product: ProductCardData; className?: string }) {
-  const variant = SHOWCASE_VARIANT_BY_CATEGORY[product.category.slug];
+  // Only products that opted into the 3D viewer are staged as a model; every
+  // other product shows its own photo.
+  const variant = resolveProductVariant(product);
   return (
     <Link
       href={`/products/${product.slug}`}
       className={`card-lift group flex h-full flex-col overflow-hidden ${className ?? ""}`}
     >
-      <div className="relative aspect-[4/3] shrink-0 overflow-hidden rounded-t-3xl bg-[radial-gradient(130%_105%_at_50%_0%,#16406e_0%,#0b2242_55%,#050d1c_100%)]">
+      {/* 3D models get the night stage; photos get a light surface, since they
+          are letterboxed whole rather than cropped to fill. */}
+      <div
+        className={`relative aspect-[4/3] shrink-0 overflow-hidden rounded-t-3xl ${
+          variant
+            ? "bg-[radial-gradient(130%_105%_at_50%_0%,#16406e_0%,#0b2242_55%,#050d1c_100%)]"
+            : "bg-paper-soft"
+        }`}
+      >
         {variant ? (
           // The category's model on a night turntable stage. The sized wrapper
           // avoids position-class conflicts with the showcase's `relative` root.
@@ -36,7 +46,7 @@ export function ProductCard({ product, className }: { product: ProductCardData; 
             alt={product.name}
             fill
             sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
-            className="object-cover transition-transform duration-700 group-hover:scale-[1.06]"
+            className="object-contain p-3 transition-transform duration-700 group-hover:scale-[1.06]"
           />
         )}
         {/* A warm glow washes over the product on hover */}

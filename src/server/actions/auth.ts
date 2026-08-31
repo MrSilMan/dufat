@@ -6,7 +6,7 @@ import { headers } from "next/headers";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/redis";
-import { createSession, destroySession, getSession } from "@/lib/auth";
+import { areaInicial, createSession, destroySession, getSession } from "@/lib/auth";
 import { recordAudit, recordAnonymousAudit } from "@/lib/audit";
 import { loginSchema, type FormState } from "@/lib/validation";
 
@@ -58,11 +58,15 @@ export async function login(_prev: FormState, formData: FormData): Promise<FormS
     { action: "session.login", summary: `${user.name} entrou na conta` },
   );
   logger.info("admin_login_succeeded", { email: user.email, role: user.role });
-  redirect("/admin");
+  // Employees land in /equipa, everyone else in /admin — the same login action
+  // serves both doors, so the destination follows the person, not the form.
+  redirect(areaInicial(user.role));
 }
 
 export async function logout(): Promise<void> {
   const session = await getSession();
+  const entrada =
+    session && areaInicial(session.role) === "/equipa" ? "/equipa/entrar" : "/admin/login";
   if (session) {
     await recordAudit(session, {
       action: "session.logout",
@@ -70,5 +74,6 @@ export async function logout(): Promise<void> {
     });
   }
   await destroySession();
-  redirect("/admin/login");
+  // Send people back to the door they came in through, not always /admin/login.
+  redirect(entrada);
 }

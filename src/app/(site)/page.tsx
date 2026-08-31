@@ -44,6 +44,9 @@ export default async function HomePage() {
         logoUrl={settings.logoUrl}
       />
       <WhyDufat />
+      {/* Landing point for the hero's "Saltar para os produtos" link. Sits on
+          its own so the target survives an empty category list. */}
+      <div id="catalogo" className="scroll-mt-24" />
       {categories.length > 0 && <CategoryGrid categories={categories} />}
       <Testimonials />
     </>

@@ -1,7 +1,10 @@
+import { requireCatalogo } from "@/lib/auth";
 import { CaseStudyForm } from "@/components/admin/CaseStudyForm";
 import { PageHeader } from "@/components/admin/ui";
 
-export default function NewCaseStudyPage() {
+export default async function NewCaseStudyPage() {
+  await requireCatalogo();
+
   return (
     <div className="space-y-8">
       <PageHeader

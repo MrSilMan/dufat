@@ -123,14 +123,25 @@ export function SiteSettingsForm({ settings, defaults, canEditBranding }: Props)
         title="Marca"
         description="Logótipo, favicon e cor do tema. Sem logótipo carregado, é usada a marca Dufat original."
       >
-        <ImageUploadField name="logoUrl" label="Logótipo" initialValue={settings.logoUrl ?? ""} />
+        <ImageUploadField
+          name="logoUrl"
+          label="Logótipo"
+          initialValue={settings.logoUrl ?? ""}
+          ratioClass="aspect-[3/1]"
+        />
         {state.errors?.logoUrl?.[0] && (
           <p role="alert" className="-mt-3 text-xs text-rose-500">
             {state.errors.logoUrl[0]}
           </p>
         )}
 
-        <ImageUploadField name="faviconUrl" label="Favicon" initialValue={settings.faviconUrl ?? ""} />
+        <ImageUploadField
+          name="faviconUrl"
+          label="Favicon"
+          initialValue={settings.faviconUrl ?? ""}
+          ratioClass="aspect-square"
+          widthClass="max-w-[11rem]"
+        />
         {state.errors?.faviconUrl?.[0] && (
           <p role="alert" className="-mt-3 text-xs text-rose-500">
             {state.errors.faviconUrl[0]}
@@ -283,6 +294,7 @@ export function SiteSettingsForm({ settings, defaults, canEditBranding }: Props)
           name="ogImageUrl"
           label="Imagem de partilha (Open Graph)"
           initialValue={settings.ogImageUrl ?? ""}
+          ratioClass="aspect-[1.91/1]"
         />
         {state.errors?.ogImageUrl?.[0] && (
           <p role="alert" className="-mt-3 text-xs text-rose-500">

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
+import type { RoleValue } from "@/lib/validation";
 
 /** Themeable input class for every admin form control. */
 export const adminInputClass = "admin-input";
@@ -17,9 +18,18 @@ type PageHeaderProps = {
   backLabel?: string;
   /** Right-aligned action (button/link). */
   action?: ReactNode;
+  /** Small label above the title. The employee area is not "Administração". */
+  eyebrow?: string;
 };
 
-export function PageHeader({ title, description, backHref, backLabel, action }: PageHeaderProps) {
+export function PageHeader({
+  title,
+  description,
+  backHref,
+  backLabel,
+  action,
+  eyebrow = "Administração",
+}: PageHeaderProps) {
   return (
     <div className="flex flex-wrap items-end justify-between gap-4">
       <div>
@@ -33,7 +43,7 @@ export function PageHeader({ title, description, backHref, backLabel, action }: 
           </Link>
         )}
         <p className="text-[0.7rem] font-bold uppercase tracking-[0.28em] text-a-accent">
-          Administração
+          {eyebrow}
         </p>
         <h1 className="mt-1.5 font-display text-3xl font-black text-a-text md:text-4xl">{title}</h1>
         {description && <p className="mt-2 max-w-xl text-sm text-a-muted">{description}</p>}
@@ -93,6 +103,97 @@ export function FormSection({ title, description, children }: FormSectionProps) 
   );
 }
 
+/**
+ * Standard edit-form shell: the record's own data in the main column, and how
+ * it is presented (publication, image) in a sidebar that follows the scroll.
+ */
+export function FormLayout({ children, aside }: { children: ReactNode; aside: ReactNode }) {
+  return (
+    <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_21rem]">
+      <div className="space-y-6">{children}</div>
+      <aside className="space-y-6 xl:sticky xl:top-6">{aside}</aside>
+    </div>
+  );
+}
+
+/** Stacked list of {@link SwitchRow}s, hairline-separated. */
+export function SwitchGroup({ legend, children }: { legend: string; children: ReactNode }) {
+  return (
+    <fieldset className="-my-1 divide-y divide-a-line">
+      <legend className="sr-only">{legend}</legend>
+      {children}
+    </fieldset>
+  );
+}
+
+/** One row of a settings list: label, hint and a switch. */
+export function SwitchRow({
+  name,
+  label,
+  hint,
+  checked,
+  defaultChecked,
+  onChange,
+}: {
+  name: string;
+  label: string;
+  hint: string;
+  checked?: boolean;
+  defaultChecked?: boolean;
+  onChange?: (checked: boolean) => void;
+}) {
+  return (
+    <label className="flex cursor-pointer items-center justify-between gap-4 rounded-xl px-1 py-2 transition-colors hover:bg-a-hover">
+      <span className="min-w-0">
+        <span className="block text-sm font-medium text-a-text">{label}</span>
+        <span className="mt-0.5 block text-xs text-a-faint">{hint}</span>
+      </span>
+      <input
+        type="checkbox"
+        name={name}
+        checked={checked}
+        defaultChecked={defaultChecked}
+        onChange={onChange ? (event) => onChange(event.target.checked) : undefined}
+        className="sr-only"
+      />
+      <span aria-hidden className="admin-switch" />
+    </label>
+  );
+}
+
+/** Sticky bottom bar carrying the form-level error, cancel link and submit. */
+export function FormActions({
+  error,
+  cancelHref,
+  cancelLabel = "Cancelar",
+  submitLabel,
+  pending,
+}: {
+  error?: string;
+  cancelHref: string;
+  cancelLabel?: string;
+  submitLabel: string;
+  pending?: boolean;
+}) {
+  return (
+    <div className="sticky bottom-0 z-20 -mx-1 mt-6 px-1 pb-1">
+      <div className="card-admin flex flex-wrap items-center justify-between gap-3 px-4 py-3 backdrop-blur">
+        <p role="alert" className="min-w-0 text-sm text-rose-500">
+          {error ?? ""}
+        </p>
+        <div className="ml-auto flex items-center gap-3">
+          <Link href={cancelHref} className="btn-admin-ghost">
+            {cancelLabel}
+          </Link>
+          <button type="submit" disabled={pending} className="btn-admin px-7">
+            {pending ? "A guardar…" : submitLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /* Badges                                                              */
 /* ------------------------------------------------------------------ */
@@ -126,11 +227,19 @@ export function PublishBadge({ published }: { published: boolean }) {
   );
 }
 
-export function RoleBadge({ role }: { role: "ADMIN" | "EDITOR" }) {
+const roleStyles: Record<RoleValue, { label: string; className: string }> = {
+  ADMIN: { label: "Administrador", className: "badge-accent" },
+  GESTOR_RH: { label: "Gestor de RH", className: "badge-warm" },
+  EDITOR: { label: "Editor", className: "badge-neutral" },
+  COLABORADOR: { label: "Colaborador", className: "badge-neutral" },
+};
+
+export function RoleBadge({ role }: { role: RoleValue }) {
+  const style = roleStyles[role] ?? roleStyles.COLABORADOR;
   return (
-    <span className={cn(badgeBase, role === "ADMIN" ? "badge-accent" : "badge-neutral")}>
+    <span className={cn(badgeBase, style.className)}>
       <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden />
-      {role === "ADMIN" ? "Administrador" : "Editor"}
+      {style.label}
     </span>
   );
 }

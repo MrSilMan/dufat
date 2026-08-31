@@ -4,15 +4,8 @@ import crypto from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { getSession } from "@/lib/auth";
 import { logger } from "@/lib/logger";
+import { UPLOAD_DIR, UPLOAD_EXTENSION_BY_TYPE, UPLOAD_URL_PREFIX } from "@/lib/uploads";
 
-const ALLOWED_TYPES: Record<string, string> = {
-  "image/png": ".png",
-  "image/jpeg": ".jpg",
-  "image/webp": ".webp",
-  "image/avif": ".avif",
-  "image/svg+xml": ".svg",
-  "application/pdf": ".pdf",
-};
 const MAX_BYTES = 8 * 1024 * 1024; // 8 MB
 
 export async function POST(request: NextRequest) {
@@ -27,7 +20,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: false, message: "Ficheiro em falta" }, { status: 400 });
   }
 
-  const extension = ALLOWED_TYPES[file.type];
+  const extension = UPLOAD_EXTENSION_BY_TYPE[file.type];
   if (!extension) {
     return NextResponse.json({ ok: false, message: "Tipo de ficheiro não suportado" }, { status: 415 });
   }
@@ -36,11 +29,23 @@ export async function POST(request: NextRequest) {
   }
 
   const name = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}${extension}`;
-  const uploadDir = path.join(process.cwd(), "public", "uploads");
-  await mkdir(uploadDir, { recursive: true });
-  await writeFile(path.join(uploadDir, name), Buffer.from(await file.arrayBuffer()));
+  try {
+    await mkdir(UPLOAD_DIR, { recursive: true });
+    await writeFile(path.join(UPLOAD_DIR, name), Buffer.from(await file.arrayBuffer()));
+  } catch (error) {
+    // A read-only or missing upload directory used to surface as a silently
+    // broken image; fail the request instead so the admin sees it.
+    logger.error("admin_asset_upload_failed", {
+      dir: UPLOAD_DIR,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return NextResponse.json(
+      { ok: false, message: "Não foi possível guardar o ficheiro no servidor" },
+      { status: 500 },
+    );
+  }
 
-  const url = `/uploads/${name}`;
+  const url = `${UPLOAD_URL_PREFIX}/${name}`;
   logger.info("admin_asset_uploaded", { url, size: file.size, by: session.email });
   return NextResponse.json({ ok: true, url });
 }

@@ -9,7 +9,9 @@ import { logger } from "@/lib/logger";
 import { rateLimit } from "@/lib/redis";
 import { recordAudit, recordAnonymousAudit } from "@/lib/audit";
 import {
+  areaInicial,
   assertAdminRole,
+  assertGestaoRH,
   createSession,
   generateInviteToken,
   hashInviteToken,
@@ -26,6 +28,7 @@ import {
   userRoleSchema,
   type FormState,
   type InviteFormState,
+  type RoleValue,
 } from "@/lib/validation";
 
 function validationError(error: z.ZodError): FormState {
@@ -36,9 +39,17 @@ function validationError(error: z.ZodError): FormState {
   };
 }
 
-function inviteUrlFor(token: string): string {
+/**
+ * Where an invitee sets their password.
+ *
+ * Employees are sent to the /equipa area rather than /admin: their first
+ * experience of the system should not be a page titled "Administração" for a
+ * back-office they will never be allowed into.
+ */
+function inviteUrlFor(token: string, role: RoleValue): string {
   const base = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
-  return `${base.replace(/\/$/, "")}/admin/convite/${token}`;
+  const area = role === "COLABORADOR" ? "equipa" : "admin";
+  return `${base.replace(/\/$/, "")}/${area}/convite/${token}`;
 }
 
 // ---------- Invites ----------
@@ -47,11 +58,23 @@ export async function createInvite(
   _prev: InviteFormState,
   formData: FormData,
 ): Promise<InviteFormState> {
-  const admin = await assertAdminRole();
+  // Registering staff is the Gestor de RH's job, so they may invite — but only
+  // as COLABORADOR. Letting them mint an ADMIN would make "Gestor de RH" a
+  // one-step path to full control of the site.
+  const admin = await assertGestaoRH();
 
   const result = inviteSchema.safeParse(Object.fromEntries(formData));
   if (!result.success) return validationError(result.error);
-  const { name, email, role } = result.data;
+
+  if (admin.role !== "ADMIN" && result.data.role !== "COLABORADOR") {
+    return {
+      ok: false,
+      message: "Só um Administrador pode conceder permissões acima de Colaborador.",
+      errors: { role: ["Apenas o Administrador atribui estas permissões."] },
+    };
+  }
+  const { name, email, role, cargoId, departamentoId, dataAdmissao, diasSemana } =
+    result.data;
 
   // An account already exists: re-inviting would either be a no-op or a way to
   // silently reset someone's access, so refuse and say why.
@@ -87,6 +110,10 @@ export async function createInvite(
         tokenHash: hashInviteToken(token),
         expiresAt,
         createdById: admin.sub,
+        cargoId: cargoId || null,
+        departamentoId: departamentoId || null,
+        dataAdmissao: dataAdmissao ? new Date(`${dataAdmissao}T00:00:00.000Z`) : null,
+        diasSemana: diasSemana ?? null,
       },
     });
     inviteId = invite.id;
@@ -97,15 +124,20 @@ export async function createInvite(
     return { ok: false, message: "Erro ao criar o convite. Tente novamente." };
   }
 
-  const url = inviteUrlFor(token);
+  const url = inviteUrlFor(token, role);
   await recordAudit(admin, {
     action: "invite.created",
     entity: "Invite",
     entityId: inviteId,
     summary: `Convidou ${name} (${email}) como ${ROLE_LABELS[role]}`,
-    meta: { email, role },
+    meta: { email, role, cargoId, departamentoId },
   });
   revalidatePath("/admin/team");
+
+  const cargoLabel = cargoId
+    ? (await prisma.cargo.findUnique({ where: { id: cargoId }, select: { nome: true } }))?.nome ??
+      null
+    : null;
 
   const mail = inviteEmail({
     name,
@@ -113,6 +145,8 @@ export async function createInvite(
     roleLabel: ROLE_LABELS[role],
     url,
     expiresInDays: INVITE_TTL_DAYS,
+    colaborador: role === "COLABORADOR",
+    cargoLabel,
   });
   const sent = await sendMail({ to: email, ...mail });
 
@@ -186,6 +220,13 @@ export async function acceptInvite(_prev: FormState, formData: FormData): Promis
           passwordHash,
           role: invite.role,
           invitedById: invite.createdById,
+          // The ficha travels with the invite, so a new employee is scoreable
+          // from their first logged activity rather than after someone
+          // remembers to go back and fill it in.
+          cargoId: invite.cargoId,
+          departamentoId: invite.departamentoId,
+          dataAdmissao: invite.dataAdmissao,
+          diasSemana: invite.diasSemana,
         },
       }),
       prisma.invite.update({
@@ -215,7 +256,7 @@ export async function acceptInvite(_prev: FormState, formData: FormData): Promis
 
   await createSession({ sub: user.id, email: user.email, name: user.name, role: user.role });
   await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
-  redirect("/admin");
+  redirect(areaInicial(user.role));
 }
 
 // ---------- Members ----------

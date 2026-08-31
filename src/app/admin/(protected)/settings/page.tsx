@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { requireAdmin } from "@/lib/auth";
+import { requireCatalogo } from "@/lib/auth";
 import { DEFAULT_SETTINGS, getSiteSettings } from "@/lib/settings";
 import { PageHeader } from "@/components/admin/ui";
 import { SiteSettingsForm } from "@/components/admin/SiteSettingsForm";
@@ -10,7 +10,7 @@ export const metadata: Metadata = {
 };
 
 export default async function AdminSettingsPage() {
-  const session = await requireAdmin();
+  const session = await requireCatalogo();
   const settings = await getSiteSettings();
   const canEditBranding = session.role === "ADMIN";
 

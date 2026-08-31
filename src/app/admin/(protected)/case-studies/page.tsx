@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
-import { requireAdmin } from "@/lib/auth";
+import { requireCatalogo } from "@/lib/auth";
 import { deleteCaseStudy } from "@/server/actions/admin";
 import { PageHeader, PublishBadge, EmptyState, RowEditLink, rowDangerClass } from "@/components/admin/ui";
 import { DangerSubmit } from "@/components/admin/DangerSubmit";
@@ -9,7 +9,7 @@ import { IconBook, IconPlus } from "@/components/admin/icons";
 export const dynamic = "force-dynamic";
 
 export default async function AdminCaseStudiesPage() {
-  const session = await requireAdmin();
+  const session = await requireCatalogo();
   const canDelete = session.role === "ADMIN";
   const studies = await prisma.caseStudy.findMany({ orderBy: { sortOrder: "asc" } });
 

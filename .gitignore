@@ -28,9 +28,16 @@ yarn-error.log*
 # logs
 /logs
 
-# uploads (managed content)
-/public/uploads/*
-!/public/uploads/.gitkeep
+# uploads (managed content, served by src/app/uploads/[...path]/route.ts)
+/var/uploads/*
+!/var/uploads/.gitkeep
+
+# database dumps — production data (emails, password hashes, audit trail)
+/var/backups/
+
+# raw 3D masters; scripts/optimize-glb.mjs compresses these into
+# public/dufat-3d-assets. 29 MB of GLB that git cannot delta-compress.
+/asset-masters/
 
 # sentry
 .sentryclirc

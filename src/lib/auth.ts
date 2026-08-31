@@ -8,7 +8,20 @@ import { prisma } from "@/lib/db";
 const SESSION_COOKIE = "dufat_session";
 const SESSION_HOURS = 8;
 
-export type Role = "ADMIN" | "EDITOR";
+export type Role = "ADMIN" | "GESTOR_RH" | "EDITOR" | "COLABORADOR";
+
+const ROLES: readonly Role[] = ["ADMIN", "GESTOR_RH", "EDITOR", "COLABORADOR"];
+
+/** Roles that belong in the back-office shell at all. */
+const ROLES_BACKOFFICE: readonly Role[] = ["ADMIN", "GESTOR_RH", "EDITOR"];
+/** Roles that may see other people's award scores. */
+const ROLES_RH: readonly Role[] = ["ADMIN", "GESTOR_RH"];
+/** Roles that may edit the public site: catalogue, case studies, quotes. */
+const ROLES_CATALOGO: readonly Role[] = ["ADMIN", "EDITOR"];
+
+function coerceRole(value: unknown): Role {
+  return ROLES.includes(value as Role) ? (value as Role) : "COLABORADOR";
+}
 
 export type Session = {
   sub: string;
@@ -62,7 +75,7 @@ export async function getSession(): Promise<Session | null> {
       sub: payload.sub!,
       email: payload.email,
       name: payload.name,
-      role: payload.role === "ADMIN" ? "ADMIN" : "EDITOR",
+      role: coerceRole(payload.role),
     };
   } catch {
     return null;
@@ -76,9 +89,9 @@ export async function getSession(): Promise<Session | null> {
  * takes effect on the next request instead of lingering for the 8-hour life of
  * an already-issued token.
  */
-export async function requireAdmin(): Promise<Session> {
+export async function requireSession(loginPath = "/admin/login"): Promise<Session> {
   const session = await getSession();
-  if (!session) redirect("/admin/login");
+  if (!session) redirect(loginPath);
 
   const user = await prisma.user.findUnique({
     where: { id: session.sub },
@@ -86,10 +99,35 @@ export async function requireAdmin(): Promise<Session> {
   });
   if (!user || !user.active) {
     await destroySession();
-    redirect("/admin/login");
+    redirect(loginPath);
   }
 
   return { sub: user.id, email: user.email, name: user.name, role: user.role };
+}
+
+/**
+ * Guard for the back-office: the catalogue, quotes, settings and team screens.
+ *
+ * Employees (COLABORADOR) are authenticated but have no business here, so they
+ * are sent to their own area rather than to a login form they have already
+ * passed.
+ */
+export async function requireAdmin(): Promise<Session> {
+  const session = await requireSession();
+  if (!ROLES_BACKOFFICE.includes(session.role)) redirect(areaInicial(session.role));
+  return session;
+}
+
+/**
+ * Guard for the catalogue side of the back-office.
+ *
+ * The Gestor de RH belongs in the back-office but not in the product catalogue,
+ * and hiding the nav link alone would leave the pages reachable by URL.
+ */
+export async function requireCatalogo(): Promise<Session> {
+  const session = await requireAdmin();
+  if (!ROLES_CATALOGO.includes(session.role)) redirect("/admin/premios");
+  return session;
 }
 
 /**
@@ -112,6 +150,42 @@ export async function assertAdminRole(): Promise<Session> {
     throw new Error("Forbidden: esta ação requer permissões de administrador.");
   }
   return session;
+}
+
+/**
+ * Guard for the award ranking, where every employee's score is on screen.
+ *
+ * The Gestor de RH runs the award but has no reason to touch site settings, so
+ * this sits deliberately between requireAdmin() and requireAdminRole().
+ */
+export async function requireGestaoRH(): Promise<Session> {
+  const session = await requireSession();
+  if (!ROLES_RH.includes(session.role)) redirect("/admin?denied=1");
+  return session;
+}
+
+/** Non-redirecting variant of {@link requireGestaoRH} for server actions. */
+export async function assertGestaoRH(): Promise<Session> {
+  const session = await requireSession();
+  if (!ROLES_RH.includes(session.role)) {
+    throw new Error("Forbidden: esta ação requer permissões de RH ou de administrador.");
+  }
+  return session;
+}
+
+export function podeVerTodosOsScores(role: Role): boolean {
+  return ROLES_RH.includes(role);
+}
+
+/**
+ * Where a role belongs after signing in or accepting an invite.
+ *
+ * One definition, used by the login action, the invite flow and every guard, so
+ * an employee can never be bounced into the back-office by one path while being
+ * redirected out of it by another.
+ */
+export function areaInicial(role: Role): string {
+  return role === "COLABORADOR" ? "/equipa" : "/admin";
 }
 
 // ---------- Invite tokens ----------

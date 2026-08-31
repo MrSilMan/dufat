@@ -477,6 +477,11 @@ body {
     box-shadow 0.2s ease,
     background-color 0.2s ease;
 }
+/* Secondary/compact variant — class-on-class so it always beats `admin-input` */
+.admin-input.admin-input-sm {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+}
 .admin-input::placeholder {
   color: var(--a-placeholder);
 }
@@ -559,6 +564,11 @@ body {
     background-color 0.2s ease,
     color 0.2s ease;
 }
+/* #e11d48 measures 3.75:1 on the dark surfaces — under AA for button text — so
+   the dark theme lightens it, exactly as `btn-row-danger` already does. */
+[data-admin-theme="dark"] .admin-shell .btn-admin-danger {
+  color: #fda4af;
+}
 [data-admin-theme="light"] .admin-shell .btn-admin-danger {
   color: #be123c;
 }
@@ -622,6 +632,138 @@ body {
   color: var(--a-text);
 }
 
+/*
+ * Switch toggle — the visual track rendered right after a visually-hidden
+ * checkbox. Preferred over `toggle-pill` when the options sit in a stacked
+ * settings list (each row reads label + state) rather than a pill row.
+ */
+@utility admin-switch {
+  position: relative;
+  display: inline-flex;
+  height: 1.375rem;
+  width: 2.5rem;
+  flex-shrink: 0;
+  border-radius: 999px;
+  border: 1px solid var(--a-line-strong);
+  background: var(--a-hover);
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease;
+}
+.admin-switch::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0.1875rem;
+  height: 0.875rem;
+  width: 0.875rem;
+  border-radius: 999px;
+  background: var(--a-faint);
+  transform: translateY(-50%);
+  transition:
+    transform 0.2s ease,
+    background-color 0.2s ease;
+}
+input:checked + .admin-switch {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--color-dufat-bright), var(--color-dufat));
+}
+input:checked + .admin-switch::after {
+  background: #fff;
+  transform: translate(1.0625rem, -50%);
+}
+input:focus-visible + .admin-switch {
+  box-shadow: 0 0 0 3px var(--a-focus-ring);
+}
+
+/*
+ * Modal surface for admin quick views. Applied to a native <dialog>, so the
+ * browser handles the top layer, focus trap and Esc; only the skin is ours.
+ */
+@utility admin-dialog {
+  /* Preflight zeroes every margin, which kills the UA's `inset:0; margin:auto`
+     centering for modal dialogs — put it back explicitly. */
+  margin: auto;
+  width: min(60rem, calc(100vw - 2rem));
+  max-height: min(44rem, calc(100vh - 3rem));
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--a-line);
+  border-radius: 1.25rem;
+  background: var(--a-surface-2);
+  color: var(--a-text);
+  box-shadow: 0 44px 90px -34px rgba(0, 0, 0, 0.6);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+}
+.admin-dialog::backdrop {
+  background: rgba(4, 9, 15, 0.55);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+}
+.admin-dialog[open] {
+  animation: admin-dialog-in 0.18s ease-out;
+}
+@keyframes admin-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .admin-dialog[open] {
+    animation: none;
+  }
+}
+
+/* Narrow variant for confirmations — a question, not a panel of content. */
+.admin-dialog-confirm {
+  width: min(27rem, calc(100vw - 2rem));
+  max-height: none;
+  overflow: visible;
+}
+
+/* Quiet icon button (dialog close, row menus) */
+@utility btn-admin-icon {
+  display: inline-flex;
+  height: 2rem;
+  width: 2rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.625rem;
+  color: var(--a-faint);
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
+}
+.btn-admin-icon:hover {
+  background: var(--a-hover);
+  color: var(--a-text);
+}
+
+/* Dashed drop target for the image upload field */
+@utility admin-dropzone {
+  display: block;
+  width: 100%;
+  cursor: pointer;
+  border-radius: 1rem;
+  border: 1px dashed var(--a-line-strong);
+  background: var(--a-inset);
+  transition:
+    border-color 0.2s ease,
+    background-color 0.2s ease;
+}
+.admin-dropzone:hover {
+  border-color: var(--a-accent-strong);
+  background: var(--a-hover);
+}
+.admin-dropzone:focus-within {
+  outline: none;
+  border-color: var(--a-accent-strong);
+  box-shadow: 0 0 0 3px var(--a-focus-ring);
+}
+
 /* Compact destructive row action (Apagar in tables/lists) */
 @utility btn-row-danger {
   border-radius: 0.5rem;
@@ -674,6 +816,16 @@ body {
   background: rgba(255, 185, 86, 0.18);
   color: var(--color-lumen-deep);
 }
+.admin-shell .badge-danger {
+  border-color: rgba(244, 63, 94, 0.35);
+  background: rgba(244, 63, 94, 0.14);
+  color: #fda4af;
+}
+[data-admin-theme="light"] .admin-shell .badge-danger {
+  border-color: rgba(190, 18, 60, 0.3);
+  background: rgba(244, 63, 94, 0.12);
+  color: #be123c;
+}
 
 /* Headings default to the display face */
 h1,
@@ -693,4 +845,348 @@ h4 {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Print surfaces — the award certificate and the ranking export       */
+/* ------------------------------------------------------------------ */
+
+/* The design brief asks for Poppins; the site ships Outfit as its display
+   face, so the certificate uses the brand's own type rather than pulling a
+   second geometric sans over the wire for one page a month. */
+
+@page {
+  size: A4;
+  margin: 0;
+}
+
+.print-shell {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  min-height: 100vh;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  .print-shell {
+    background: #fff;
+    min-height: 0;
+  }
+  .quebra-pagina {
+    break-after: page;
+  }
+}
+
+/* ---- Certificate ---- */
+
+.certificado {
+  width: 210mm;
+  min-height: 297mm;
+  margin: 0 auto;
+  padding: 12mm;
+  background: var(--color-dufat-deep);
+  background-image: linear-gradient(
+    155deg,
+    var(--color-dufat-deep) 0%,
+    #0d3f70 45%,
+    var(--color-dufat) 100%
+  );
+  /* Browsers strip background colours when printing unless asked not to; the
+     navy ground is the certificate, not decoration. */
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+.certificado-moldura {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 273mm;
+  padding: 16mm 14mm;
+  text-align: center;
+  border: 1.5pt solid var(--color-lumen);
+  outline: 0.5pt solid rgba(255, 185, 86, 0.45);
+  outline-offset: 3mm;
+  color: #fff;
+}
+
+.certificado-topo {
+  margin-bottom: 10mm;
+}
+
+.certificado-logo {
+  height: 12mm;
+  margin: 0 auto;
+  /* Uploaded logos are dark-on-transparent for the light site; on navy they
+     have to be inverted to read at all. */
+  filter: brightness(0) invert(1);
+}
+
+.certificado-marca {
+  font-family: var(--font-display);
+  font-size: 26pt;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  color: #fff;
+}
+
+.certificado-nif {
+  margin-top: 2mm;
+  font-size: 8pt;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-dufat-sky);
+}
+
+.certificado-eyebrow {
+  font-size: 8.5pt;
+  font-weight: 700;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: var(--color-lumen);
+}
+
+.certificado-titulo {
+  margin-top: 3mm;
+  font-family: var(--font-display);
+  font-size: 30pt;
+  font-weight: 900;
+  line-height: 1.05;
+  color: #fff;
+}
+
+.certificado-foto {
+  width: 34mm;
+  height: 34mm;
+  margin: 10mm auto 0;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1pt solid var(--color-lumen);
+  box-shadow: 0 0 0 2mm rgba(255, 185, 86, 0.14);
+}
+
+.certificado-foto-vazia {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.certificado-atribuido {
+  margin-top: 9mm;
+  font-size: 10pt;
+  font-style: italic;
+  color: var(--color-dufat-sky);
+}
+
+.certificado-nome {
+  margin-top: 3mm;
+  font-family: var(--font-display);
+  font-size: 24pt;
+  font-weight: 800;
+  line-height: 1.15;
+  color: var(--color-lumen);
+}
+
+.certificado-cargo {
+  margin-top: 2mm;
+  font-size: 10pt;
+  letter-spacing: 0.05em;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.certificado-periodo {
+  margin-top: 8mm;
+  padding: 2mm 8mm;
+  border: 0.75pt solid rgba(255, 185, 86, 0.5);
+  border-radius: 999px;
+  font-size: 11pt;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #fff;
+}
+
+.certificado-corpo {
+  margin-top: 9mm;
+  max-width: 130mm;
+  font-size: 10.5pt;
+  line-height: 1.65;
+  color: rgba(255, 255, 255, 0.86);
+}
+
+.certificado-rodape {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18mm;
+  width: 100%;
+  margin-top: auto;
+  padding-top: 12mm;
+}
+
+.certificado-linha {
+  height: 0;
+  border-top: 0.75pt solid rgba(255, 255, 255, 0.35);
+  margin-bottom: 3mm;
+}
+
+.certificado-assinatura {
+  font-size: 10pt;
+  font-weight: 600;
+  color: #fff;
+}
+
+.certificado-funcao {
+  margin-top: 1mm;
+  font-size: 7.5pt;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-dufat-sky);
+}
+
+/* ---- Ranking print sheet ---- */
+
+.folha-a4 {
+  width: 210mm;
+  min-height: 297mm;
+  margin: 0 auto;
+  padding: 16mm 14mm;
+  background: #fff;
+  color: var(--color-ink);
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+.folha-a4 table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 8.5pt;
+}
+
+.folha-a4 th,
+.folha-a4 td {
+  padding: 1.8mm 2mm;
+  border-bottom: 0.4pt solid var(--color-line);
+  text-align: left;
+}
+
+.folha-a4 th {
+  font-size: 7pt;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-ink-soft);
+  border-bottom: 0.75pt solid var(--color-dufat);
+}
+
+.folha-a4 .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.folha-a4 thead {
+  display: table-header-group;
+}
+
+.folha-a4 tr {
+  break-inside: avoid;
+}
+
+/* ------------------------------------------------------------------ */
+/* Employee area (/equipa)                                             */
+/* ------------------------------------------------------------------ */
+
+/* Clears the iOS home indicator instead of sitting under it. Used by the bottom
+   navigation and by the sheet's pinned footer, which lands in the same place. */
+.equipa-safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.equipa-tabbar {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/*
+ * The entry form.
+ *
+ * A bottom sheet on the phone — it arrives from the edge the thumb is already
+ * near, and its actions stay pinned there. From `md:` up the same <dialog>
+ * becomes an ordinary centred modal, because a sheet glued to the bottom of a
+ * 1400px window is a phone idiom wearing the wrong clothes.
+ */
+.equipa-sheet {
+  margin: auto auto 0;
+  width: 100%;
+  max-width: none;
+  max-height: min(92vh, calc(100vh - 2rem));
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--a-line);
+  border-bottom: 0;
+  border-radius: 1.5rem 1.5rem 0 0;
+  background: var(--a-surface-2);
+  color: var(--a-text);
+  box-shadow: 0 -24px 70px -30px rgba(0, 0, 0, 0.65);
+}
+.equipa-sheet::backdrop {
+  background: rgba(4, 9, 15, 0.55);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+}
+.equipa-sheet[open] {
+  animation: equipa-sheet-in 0.24s cubic-bezier(0.32, 0.72, 0, 1);
+}
+@keyframes equipa-sheet-in {
+  from {
+    transform: translateY(8%);
+    opacity: 0.4;
+  }
+}
+@media (min-width: 48rem) {
+  .equipa-sheet {
+    margin: auto;
+    width: min(34rem, calc(100vw - 2rem));
+    max-height: min(46rem, calc(100vh - 3rem));
+    border: 1px solid var(--a-line);
+    border-radius: 1.25rem;
+    box-shadow: 0 44px 90px -34px rgba(0, 0, 0, 0.6);
+  }
+  .equipa-sheet[open] {
+    animation: admin-dialog-in 0.18s ease-out;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .equipa-sheet[open] {
+    animation: none;
+  }
+}
+
+/*
+ * A just-saved entry, so returning from the sheet lands the eye on the row that
+ * was created rather than on the top of a list that looks unchanged.
+ */
+@keyframes equipa-destaque {
+  from {
+    background-color: var(--a-accent-soft);
+  }
+}
+.equipa-destaque {
+  animation: equipa-destaque 2.4s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .equipa-destaque {
+    animation: none;
+    background-color: var(--a-accent-soft);
+  }
+}
+
+/*
+ * Sticky day header on the register list.
+ *
+ * The shell's background is a gradient with two radial glows, so a solid fill
+ * here would show a seam where it crosses one. Tinted glass over whatever is
+ * behind it stays invisible in both themes.
+ */
+.equipa-dia {
+  background: color-mix(in srgb, var(--a-bg) 88%, transparent);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
 }

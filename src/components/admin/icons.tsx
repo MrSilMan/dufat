@@ -167,3 +167,60 @@ export function IconSettings({ className }: IconProps) {
     </svg>
   );
 }
+
+/** Activity sheet */
+export function IconClipboard({ className }: IconProps) {
+  return (
+    <svg {...base(className)}>
+      <path d="M9 4h6a1 1 0 0 1 1 1v1H8V5a1 1 0 0 1 1-1z" />
+      <path d="M16 6h2a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h2" />
+      <path d="M9 11h6" />
+      <path d="M9 15h4" />
+    </svg>
+  );
+}
+
+/** Award trophy */
+export function IconTrophy({ className }: IconProps) {
+  return (
+    <svg {...base(className)}>
+      <path d="M8 4h8v5a4 4 0 0 1-8 0V4z" />
+      <path d="M8 6H5.5a2.5 2.5 0 0 0 2.5 2.5" />
+      <path d="M16 6h2.5a2.5 2.5 0 0 1-2.5 2.5" />
+      <path d="M12 13v3" />
+      <path d="M9 20h6" />
+      <path d="M10 20a2 2 0 0 1 4 0" />
+    </svg>
+  );
+}
+
+/** Downloadable / export */
+export function IconDownload({ className }: IconProps) {
+  return (
+    <svg {...base(className)}>
+      <path d="M12 4v10" />
+      <path d="m8 11 4 4 4-4" />
+      <path d="M5 19h14" />
+    </svg>
+  );
+}
+
+/** Disclosure chevron for collapsible nav groups */
+export function IconChevron({ className }: IconProps) {
+  return (
+    <svg {...base(className)}>
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
+
+/** Warning triangle — confirmations and destructive prompts */
+export function IconAlert({ className }: IconProps) {
+  return (
+    <svg {...base(className)}>
+      <path d="M10.3 4.3 2.6 17.6a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0Z" />
+      <path d="M12 10v4" />
+      <circle cx="12" cy="17" r="0.9" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}

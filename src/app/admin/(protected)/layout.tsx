@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { prisma } from "@/lib/db";
-import { requireAdmin } from "@/lib/auth";
+import { requireSession } from "@/lib/auth";
 import { getSiteSettings } from "@/lib/settings";
 import { logout } from "@/server/actions/auth";
 import { DufatLogo } from "@/components/brand/DufatLogo";
@@ -26,11 +26,15 @@ const badgeClass =
   "rounded-full border border-a-accent/25 bg-a-accent-soft px-2 py-0.5 text-[0.62rem] font-bold uppercase tracking-[0.14em] text-a-on-accent-soft";
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
-  const session = await requireAdmin();
+  // Only authentication here — authorisation belongs to each page. Redirecting
+  // by role in the layout would bounce an employee off the one page that is
+  // theirs, since it lives inside this same shell.
+  const session = await requireSession();
   const settings = await getSiteSettings();
-  const newQuotes = await prisma.quoteRequest
-    .count({ where: { status: "NEW" } })
-    .catch(() => 0);
+  const podeVerOrcamentos = session.role === "ADMIN" || session.role === "EDITOR";
+  const newQuotes = podeVerOrcamentos
+    ? await prisma.quoteRequest.count({ where: { status: "NEW" } }).catch(() => 0)
+    : 0;
 
   return (
     <div id="admin-shell" className="admin-shell">

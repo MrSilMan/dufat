@@ -58,7 +58,8 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
       - app-logs:/app/logs
-      - app-uploads:/app/public/uploads
+      # Uploads live outside public/ — see src/lib/uploads.ts.
+      - app-uploads:/app/var/uploads
     depends_on:
       postgres:
         condition: service_healthy

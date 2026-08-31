@@ -7,9 +7,18 @@ datasource db {
   provider = "postgresql"
 }
 
+/// Platform permissions. Distinct from {@link Cargo}, which is the job role
+/// (Caixa, Contabilista…) the award normalises against.
+///
+/// ADMIN        — Administrador: everything, including confirming the award.
+/// GESTOR_RH    — sees every score and runs the ranking, but not site settings.
+/// EDITOR       — the catalogue editor role the CMS shipped with.
+/// COLABORADOR  — an employee: own sheet and own score only.
 enum Role {
   ADMIN
+  GESTOR_RH
   EDITOR
+  COLABORADOR
 }
 
 enum QuoteStatus {
@@ -42,8 +51,36 @@ model User {
   invitedUsers User[]     @relation("UserInvites")
   auditLogs    AuditLog[]
   invitesSent  Invite[]   @relation("InviteCreatedBy")
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+
+  // ---- Employee record (award module) ----
+  /// Job role. Null for accounts that are not scored (a pure catalogue editor).
+  cargoId        String?
+  cargo          Cargo?        @relation(fields: [cargoId], references: [id], onDelete: SetNull)
+  departamentoId String?
+  departamento   Departamento? @relation(fields: [departamentoId], references: [id], onDelete: SetNull)
+  /// Profile photo. Printed on the "Funcionário do Mês" certificate.
+  photoUrl       String?
+  /// Hire date — the month someone joins is pro-rated from this.
+  dataAdmissao   DateTime?     @db.Date
+  dataSaida      DateTime?     @db.Date
+  /// Contracted working days per week. Null falls back to the cargo's default,
+  /// so part-timers are not measured against a full-time expectation.
+  diasSemana     Int?
+
+  folhas             FolhaMensal[]
+  folhasFechadas     FolhaMensal[] @relation("FolhaFechadaPor")
+  atividades         Atividade[]   @relation("AtividadeAutor")
+  atividadesRevistas Atividade[]   @relation("AtividadeRevisor")
+  ausencias          Ausencia[]
+  awardScores        AwardScore[]  @relation("AwardScoreUser")
+  awardsGanhos       AwardPeriod[] @relation("AwardVencedor")
+  awardsConfirmados  AwardPeriod[] @relation("AwardConfirmadoPor")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([departamentoId])
+  @@index([cargoId])
 }
 
 /// A pending team invitation. The token is stored as a SHA-256 hash — the raw
@@ -60,8 +97,20 @@ model Invite {
   acceptedAt  DateTime?
   createdById String
   createdBy   User         @relation("InviteCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+
+  /// Employee record captured at invite time and copied onto the User when the
+  /// invite is accepted. Filled in here rather than afterwards because an
+  /// employee with no cargo is invisible to the award — the ficha has to be
+  /// complete from the first day, not whenever someone remembers to finish it.
+  cargoId        String?
+  cargo          Cargo?        @relation(fields: [cargoId], references: [id], onDelete: SetNull)
+  departamentoId String?
+  departamento   Departamento? @relation(fields: [departamentoId], references: [id], onDelete: SetNull)
+  dataAdmissao   DateTime?     @db.Date
+  diasSemana     Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([email])
   @@index([status, expiresAt])
@@ -69,17 +118,17 @@ model Invite {
 
 /// Append-only trail of every write performed in the admin area.
 model AuditLog {
-  id     String @id @default(cuid())
+  id        String   @id @default(cuid())
   /// Machine-readable event, e.g. "product.updated" (see lib/audit.ts).
-  action String
+  action    String
   /// Entity type touched, e.g. "Product"; null for session events.
-  entity String?
-  entityId String?
+  entity    String?
+  entityId  String?
   /// Human-readable summary shown in the audit table.
-  summary String
+  summary   String
   /// Extra structured context (changed fields, old/new status…).
-  meta   Json?
-  ip     String?
+  meta      Json?
+  ip        String?
   /// Actor. Kept as a nullable relation plus a denormalised email/name so the
   /// trail stays readable even if the user row is later deleted.
   userId    String?
@@ -118,6 +167,16 @@ model Product {
   featured         Boolean        @default(false)
   published        Boolean        @default(true)
   has3dViewer      Boolean        @default(false)
+  /// Which 3D model represents this product when has3dViewer is on — a
+  /// TurntableVariant (see src/lib/three/showcaseVariants.ts): the complete
+  /// street light, one of its parts ("head", "arm", "pole", "base", "door") or
+  /// a showcase product. Null falls back to the category's model.
+  viewer3dVariant  String?
+  /// INVGEST billing-catalog sync (see src/lib/invgest.ts). Null until synced;
+  /// items are create-only in INVGEST, so once set these are not re-pushed.
+  invgestItemId    String?
+  invgestItemCode  String?
+  invgestSyncedAt  DateTime?
   categoryId       String
   category         Category       @relation(fields: [categoryId], references: [id])
   specs            Spec[]
@@ -232,4 +291,302 @@ model SiteSettings {
   whatsappUrl  String?
 
   updatedAt DateTime @updatedAt
+}
+
+/**
+ * ------------------------------------------------------------------
+ */
+/**
+ * Prémio "Funcionário do Mês" — organisation
+ */
+/**
+ * ------------------------------------------------------------------
+ */
+
+/// A DUFAT department. Drives the optional one-winner-per-department mode and
+/// groups the ranking table.
+model Departamento {
+  id           String        @id @default(cuid())
+  slug         String        @unique
+  nome         String
+  ativo        Boolean       @default(true)
+  sortOrder    Int           @default(0)
+  users        User[]
+  invites      Invite[]
+  awardPeriods AwardPeriod[]
+  createdAt    DateTime      @default(now())
+}
+
+/// A job role — Caixa, Contabilista, Técnico de Armazém…
+///
+/// This is the unit of fairness: volume and hours are normalised against the
+/// median of the employee's own cargo, because a Caixa logging 200 short
+/// counter operations and a Contabilista closing 12 accounts are not
+/// comparable on raw totals.
+model Cargo {
+  id         String   @id @default(cuid())
+  slug       String   @unique
+  nome       String
+  ativo      Boolean  @default(true)
+  /// Default contracted days per week for this cargo; User.diasSemana wins.
+  diasSemana Int      @default(5)
+  users      User[]
+  invites    Invite[]
+  createdAt  DateTime @default(now())
+}
+
+enum TipoAusencia {
+  FERIAS
+  BAIXA
+  LICENCA
+  FORMACAO
+  OUTRO
+}
+
+/// Approved time off. Subtracted from the expected working days so nobody is
+/// punished in the consistency score for a month they were signed off for.
+model Ausencia {
+  id        String       @id @default(cuid())
+  userId    String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tipo      TipoAusencia
+  inicio    DateTime     @db.Date
+  fim       DateTime     @db.Date
+  /// Only approved absences reduce the expected days.
+  aprovada  Boolean      @default(false)
+  nota      String?
+  createdAt DateTime     @default(now())
+
+  @@index([userId, inicio, fim])
+}
+
+/**
+ * ------------------------------------------------------------------
+ */
+/**
+ * Prémio "Funcionário do Mês" — activity record
+ */
+/**
+ * ------------------------------------------------------------------
+ */
+
+model CategoriaAtividade {
+  id         String      @id @default(cuid())
+  slug       String      @unique
+  nome       String
+  /// Marks a catch-all bucket ("Outro"). More than `limiteOutroPct` of an
+  /// employee's validated hours sitting in these costs them points, because a
+  /// month of unlabelled work cannot be assessed.
+  isOutro    Boolean     @default(false)
+  ativo      Boolean     @default(true)
+  sortOrder  Int         @default(0)
+  atividades Atividade[]
+}
+
+enum EstadoFolha {
+  ABERTA
+  SUBMETIDA
+  FECHADA
+}
+
+/// One employee's activity sheet for one month. Only a FECHADA sheet with
+/// nothing left in question can enter the ranking.
+model FolhaMensal {
+  id             String      @id @default(cuid())
+  /// "YYYY-MM".
+  periodo        String
+  userId         String
+  user           User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  estado         EstadoFolha @default(ABERTA)
+  /// Submission deadline. Submitting after it costs points.
+  prazoSubmissao DateTime?
+  submetidaEm    DateTime?
+  fechadaEm      DateTime?
+  fechadaPorId   String?
+  fechadaPor     User?       @relation("FolhaFechadaPor", fields: [fechadaPorId], references: [id], onDelete: SetNull)
+  atividades     Atividade[]
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  @@unique([userId, periodo])
+  @@index([periodo, estado])
+}
+
+enum EstadoAtividade {
+  RASCUNHO
+  SUBMETIDA
+  VALIDADA
+  EM_JUSTIFICACAO
+  JUSTIFICADA
+  REJEITADA
+}
+
+/// A single logged piece of work.
+///
+/// `registadaEm` is deliberately separate from `dia`: punctuality is the gap
+/// between when work happened and when it was written down, and a month logged
+/// in one sitting on the last day should not score like a month logged daily.
+model Atividade {
+  id          String             @id @default(cuid())
+  folhaId     String
+  folha       FolhaMensal        @relation(fields: [folhaId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User               @relation("AtividadeAutor", fields: [userId], references: [id], onDelete: Cascade)
+  categoriaId String
+  categoria   CategoriaAtividade @relation(fields: [categoriaId], references: [id])
+  descricao   String
+  /// The day the work happened (date only — the sheet is a daily record).
+  dia         DateTime           @db.Date
+  inicioEm    DateTime
+  fimEm       DateTime
+  /// Duration in minutes, derived from inicioEm/fimEm on write.
+  minutos     Int
+  estado      EstadoAtividade    @default(RASCUNHO)
+
+  /// Raised by the anti-gaming pass: an overlap, a bulk-entry day, or an
+  /// implausibly short entry. Only costs points once it is actually questioned.
+  possivelInconsistencia Boolean @default(false)
+  /// Latched the first time the entry is sent back. Quality counts activities
+  /// validated *without ever* having been questioned, so clearing the state
+  /// later must not clear this.
+  jaQuestionada          Boolean @default(false)
+  /// Set by the anti-gaming pass when this entry duplicates another (same
+  /// cargo-day-category with overlapping times); it is counted once.
+  duplicadaDe            String?
+
+  notaRevisao  String?
+  /// When the employee actually recorded it.
+  registadaEm  DateTime  @default(now())
+  revistaEm    DateTime?
+  revistaPorId String?
+  revistaPor   User?     @relation("AtividadeRevisor", fields: [revistaPorId], references: [id], onDelete: SetNull)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([folhaId, dia])
+  @@index([userId, dia])
+  @@index([estado])
+}
+
+/**
+ * ------------------------------------------------------------------
+ */
+/**
+ * Prémio "Funcionário do Mês" — award
+ */
+/**
+ * ------------------------------------------------------------------
+ */
+
+/// Weights, thresholds and switches, all editable by the Administrador.
+/// Single row pinned to id "singleton", like SiteSettings.
+model AwardSettings {
+  id String @id @default("singleton")
+
+  // Component weights — must total 100.
+  pesoVolume       Int @default(30)
+  pesoHoras        Int @default(25)
+  pesoConsistencia Int @default(20)
+  pesoQualidade    Int @default(15)
+  pesoPontualidade Int @default(10)
+
+  // Penalties, subtracted from the weighted total.
+  penalRejeitada      Int @default(5)
+  penalInconsistencia Int @default(3)
+  penalOutro          Int @default(10)
+  penalAtraso         Int @default(5)
+
+  // Thresholds.
+  /// Volume/hours are capped at this % of the cargo median so fragmenting work
+  /// into many tiny entries cannot run away with the ranking.
+  tetoNormalizacaoPct Int @default(150)
+  /// "Outro" hours above this % of validated hours trigger penalOutro.
+  limiteOutroPct      Int @default(30)
+  /// Minimum days with a recorded activity, pro-rated against expected days.
+  minDiasAtividade    Int @default(15)
+  /// More rejected activities than this and the employee is not eligible.
+  maxRejeitadas       Int @default(2)
+  /// A cargo with fewer people than this falls back to its historical median.
+  minPorCargo         Int @default(3)
+
+  // Switches.
+  /// One winner per department instead of one company-wide. Recommended above
+  /// roughly 30 people.
+  porDepartamento         Boolean @default(false)
+  /// Off by default: last period's winner is excluded from the next one, so
+  /// the award rotates.
+  excluirVencedorAnterior Boolean @default(false)
+
+  updatedAt DateTime @updatedAt
+}
+
+enum AwardTipo {
+  MENSAL
+  ANUAL
+}
+
+enum AwardEstado {
+  CALCULADO
+  CONFIRMADO
+}
+
+model AwardPeriod {
+  id             String        @id @default(cuid())
+  /// "YYYY-MM" for MENSAL, "YYYY" for ANUAL.
+  periodo        String
+  tipo           AwardTipo     @default(MENSAL)
+  departamentoId String?
+  departamento   Departamento? @relation(fields: [departamentoId], references: [id], onDelete: SetNull)
+  /// departamentoId, or "EMPRESA" for a company-wide period. Exists only so the
+  /// unique index below actually holds — Postgres treats NULLs as distinct, so
+  /// a nullable departamentoId would allow duplicate company-wide periods.
+  escopo         String        @default("EMPRESA")
+  estado         AwardEstado   @default(CALCULADO)
+
+  vencedorId        String?
+  vencedor          User?    @relation("AwardVencedor", fields: [vencedorId], references: [id], onDelete: SetNull)
+  pontuacaoVencedor Decimal? @db.Decimal(5, 2)
+  /// Who the calculation proposed. Kept separately from vencedorId so an
+  /// override stays visible months later.
+  propostoId        String?
+  /// Required when the confirmed winner is not the top-scoring employee.
+  motivoOverride    String?
+
+  confirmadoPorId String?
+  confirmadoPor   User?     @relation("AwardConfirmadoPor", fields: [confirmadoPorId], references: [id], onDelete: SetNull)
+  confirmadoEm    DateTime?
+  notaConfirmacao String?
+
+  /// The weights and thresholds this period was scored with, frozen at
+  /// calculation time — the published numbers must still add up months later
+  /// even after the admin retunes the weights.
+  parametros  Json
+  calculadoEm DateTime     @default(now())
+  scores      AwardScore[]
+
+  @@unique([periodo, tipo, escopo])
+  @@index([tipo, periodo])
+}
+
+/// Every employee's full breakdown for a period, not just the winner's — the
+/// admin has to be able to answer "why not me?" months after the fact.
+model AwardScore {
+  id                    String      @id @default(cuid())
+  awardPeriodId         String
+  awardPeriod           AwardPeriod @relation(fields: [awardPeriodId], references: [id], onDelete: Cascade)
+  userId                String
+  user                  User        @relation("AwardScoreUser", fields: [userId], references: [id], onDelete: Cascade)
+  /// 1-based rank among eligible employees; null when not eligible.
+  posicao               Int?
+  pontuacaoTotal        Decimal     @default(0) @db.Decimal(5, 2)
+  /// Per component: raw value, the cargo median it was normalised against, the
+  /// normalised 0–1 figure and the weighted points it contributed.
+  componentes           Json
+  /// Each penalty applied, with its count and the points it cost.
+  penalizacoes          Json
+  elegivel              Boolean     @default(true)
+  motivoInelegibilidade String?
+
+  @@unique([awardPeriodId, userId])
+  @@index([awardPeriodId, posicao])
 }
