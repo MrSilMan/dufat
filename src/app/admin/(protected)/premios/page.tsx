@@ -54,14 +54,25 @@ export default async function RankingPage({ searchParams }: Props) {
       <div className="space-y-8">
         {header}
         <div className="card-admin">
+          {/* Parameters are offered here and not only in the footnote of a
+              calculated ranking: each period freezes the weights it was scored
+              with, so before the first calculation is the one moment changing
+              them is free. */}
           <EmptyState
             icon={<IconTrophy className="h-5 w-5" />}
             title={`${rotuloPeriodo(periodo)} ainda não foi calculado`}
             description="Feche as folhas de atividade do mês e depois calcule o ranking. Nada fica visível para os colaboradores até confirmar o vencedor."
             action={
-              <Link href="/admin/folhas" className="btn-admin-ghost">
-                Ver folhas de atividade
-              </Link>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <Link href="/admin/folhas" className="btn-admin-ghost">
+                  Ver folhas de atividade
+                </Link>
+                {session.role === "ADMIN" && (
+                  <Link href="/admin/premios/definicoes" className="btn-admin-ghost">
+                    Parâmetros do prémio
+                  </Link>
+                )}
+              </div>
             }
           />
         </div>

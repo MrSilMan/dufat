@@ -79,8 +79,23 @@ const NAV: Entrada[] = [
       { href: "/equipa", label: "A minha atividade", icon: IconClipboard, roles: TODOS },
       { href: "/admin/folhas", label: "Folhas de atividade", icon: IconClipboard, roles: RH },
       { href: "/admin/premios", label: "Prémios", icon: IconTrophy, roles: RH },
+      {
+        href: "/admin/premios/historico",
+        label: "Histórico de prémios",
+        icon: IconTrophy,
+        roles: RH,
+      },
       { href: "/admin/colaboradores", label: "Colaboradores", icon: IconUsers, roles: RH },
       { href: "/admin/organizacao", label: "Organização", icon: IconSettings, roles: RH },
+      // "Parâmetros do prémio" rather than "Definições": /admin/settings already
+      // owns that label under Sistema, and two "Definições" in one sidebar is a
+      // coin toss for whoever is looking for the award weights.
+      {
+        href: "/admin/premios/definicoes",
+        label: "Parâmetros do prémio",
+        icon: IconSettings,
+        roles: SO_ADMIN,
+      },
       { href: "/admin/team", label: "Contas e acessos", icon: IconShield, roles: SO_ADMIN },
     ],
   },
@@ -137,8 +152,8 @@ export function AdminNav({ variant = "sidebar", newQuotes = 0, role = "COLABORAD
 
   const entradas = visiveis(role);
 
-  // Most specific match wins, so /admin/premios/definicoes highlights "Prémios"
-  // and not also a shorter prefix that happens to match.
+  // Most specific match wins, so /admin/premios/definicoes highlights "Parâmetros
+  // do prémio" alone and not also "Prémios", which is a prefix of it.
   const ativo = folhas(entradas)
     .filter((item) => (item.exact ? pathname === item.href : pathname.startsWith(item.href)))
     .sort((a, b) => b.href.length - a.href.length)[0];
