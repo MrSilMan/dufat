@@ -24,23 +24,55 @@ function gerarPassword(): string {
   return `${letras[bytes[0]! % letras.length]}${corpo}${digitos[bytes[1]! % digitos.length]}`;
 }
 
-export function ResetPasswordForm({
-  userId,
-  userName,
-}: {
-  userId: string;
-  userName: string;
-}) {
+/**
+ * Shows the temporary password once it has been saved, next to a copy button.
+ *
+ * It is never recoverable afterwards — only its hash is stored — so this is the
+ * single moment the admin can take it, and reading fourteen mixed-case
+ * characters off a screen into a chat window is exactly where they get mangled.
+ */
+function PasswordGuardada({ password }: { password: string }) {
+  const [copiado, setCopiado] = useState(false);
+
+  const copiar = async () => {
+    try {
+      await navigator.clipboard.writeText(password);
+      setCopiado(true);
+      setTimeout(() => setCopiado(false), 2000);
+    } catch {
+      // Clipboard access can be refused outright; the password is on screen to
+      // be typed either way, so a failed copy needs no error of its own.
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2 rounded-xl border border-a-line bg-a-inset p-2 pl-3.5">
+      <code className="min-w-0 flex-1 truncate font-mono text-sm text-a-text">{password}</code>
+      <button
+        type="button"
+        onClick={copiar}
+        className="shrink-0 rounded-lg border border-a-line px-3 py-1.5 text-xs font-medium text-a-muted transition-colors hover:border-a-line-strong hover:text-a-text"
+      >
+        {copiado ? "Copiado" : "Copiar"}
+      </button>
+    </div>
+  );
+}
+
+export function ResetPasswordForm({ userId, userName }: { userId: string; userName: string }) {
   const [state, action, pending] = useActionState(resetUserPassword, initialFormState);
   const [aberto, setAberto] = useState(false);
   const [password, setPassword] = useState("");
   const inputId = useId();
 
-  if (state.ok && state.message) {
+  if (state.ok) {
     return (
-      <div className="text-right">
-        <p className="text-xs text-emerald-600">{state.message}</p>
-        <p className="mt-1 font-mono text-xs text-a-muted">{password}</p>
+      <div className="space-y-2">
+        <p className="text-xs font-medium text-emerald-600">{state.message}</p>
+        <PasswordGuardada password={password} />
+        <p className="text-xs text-a-faint">
+          Anote-a ou copie-a agora — não volta a ser mostrada.
+        </p>
       </div>
     );
   }
@@ -53,7 +85,7 @@ export function ResetPasswordForm({
           setPassword(gerarPassword());
           setAberto(true);
         }}
-        className="rounded-lg border border-a-line px-3 py-1.5 text-xs font-medium text-a-muted transition-colors hover:border-a-line-strong hover:text-a-text"
+        className="btn-admin-ghost"
       >
         Repor palavra-passe
       </button>
@@ -61,7 +93,7 @@ export function ResetPasswordForm({
   }
 
   return (
-    <form action={action} className="w-full max-w-xs space-y-2 text-left">
+    <form action={action} className="space-y-2">
       <input type="hidden" name="id" value={userId} />
       <label htmlFor={inputId} className="block text-xs font-medium text-a-muted">
         Palavra-passe temporária para {userName}
@@ -71,7 +103,7 @@ export function ResetPasswordForm({
         name="password"
         value={password}
         onChange={(event) => setPassword(event.target.value)}
-        className={`${adminInputClass} font-mono text-sm`}
+        className={`${adminInputClass} font-mono`}
         autoComplete="off"
         spellCheck={false}
       />
@@ -85,12 +117,8 @@ export function ResetPasswordForm({
           {state.message}
         </p>
       )}
-      <p className="text-xs text-a-faint">
-        Anote-a antes de guardar — não volta a ser mostrada. {userName} terá de a alterar
-        ao entrar.
-      </p>
-      <div className="flex gap-2">
-        <button type="submit" disabled={pending} className="btn-admin px-3 py-1.5 text-xs">
+      <div className="flex flex-wrap gap-2 pt-1">
+        <button type="submit" disabled={pending} className="btn-admin px-4 py-2 text-sm">
           {pending ? "A guardar…" : "Guardar"}
         </button>
         <button

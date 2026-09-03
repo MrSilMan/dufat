@@ -8,16 +8,18 @@ import { ROLE_LABELS, type RoleValue } from "@/lib/validation";
 type Props = {
   userId: string;
   role: RoleValue;
-  /** Disabled for the last admin and for your own row — the server enforces both. */
-  disabled?: boolean;
-  disabledTitle?: string;
 };
 
 /**
  * Role dropdown that submits on change. Demoting an admin is a meaningful
  * change, so it asks first and reverts the select if the user backs out.
+ *
+ * The caller decides whether the control is offered at all: the last admin and
+ * your own row get an explanation in its place rather than a dead dropdown,
+ * because a disabled select says "no" without ever saying why. The server
+ * enforces both rules regardless.
  */
-export function RoleSelect({ userId, role, disabled, disabledTitle }: Props) {
+export function RoleSelect({ userId, role }: Props) {
   const formRef = useRef<HTMLFormElement>(null);
   const selectRef = useRef<HTMLSelectElement>(null);
   const [pedido, setPedido] = useState<RoleValue | null>(null);
@@ -36,10 +38,8 @@ export function RoleSelect({ userId, role, disabled, disabledTitle }: Props) {
         ref={selectRef}
         name="role"
         defaultValue={role}
-        disabled={disabled}
-        title={disabled ? disabledTitle : undefined}
         aria-label="Permissões"
-        className="admin-input h-8 w-auto py-0 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+        className="admin-input"
         onChange={(event) => setPedido(event.target.value as RoleValue)}
       >
         <option value="COLABORADOR">Colaborador</option>

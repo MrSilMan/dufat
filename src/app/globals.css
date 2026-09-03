@@ -723,6 +723,15 @@ input:focus-visible + .admin-switch {
   overflow: visible;
 }
 
+/*
+ * One record and the actions on it. Narrower than the quick view because it is
+ * a single column of controls, and a 60rem-wide form of short rows reads as a
+ * mostly empty box.
+ */
+.admin-dialog-panel {
+  width: min(34rem, calc(100vw - 2rem));
+}
+
 /* Quiet icon button (dialog close, row menus) */
 @utility btn-admin-icon {
   display: inline-flex;
