@@ -4,6 +4,7 @@ import { useActionState } from "react";
 import { login } from "@/server/actions/auth";
 import { initialFormState } from "@/lib/validation";
 import { AdminField, adminInputClass } from "@/components/admin/ui";
+import { PasswordInput } from "@/components/admin/PasswordInput";
 
 export function LoginForm() {
   const [state, action, pending] = useActionState(login, initialFormState);
@@ -22,12 +23,10 @@ export function LoginForm() {
         />
       </AdminField>
       <AdminField label="Password" htmlFor="login-password">
-        <input
+        <PasswordInput
           id="login-password"
           name="password"
-          type="password"
           required
-          className={adminInputClass}
           autoComplete="current-password"
           placeholder="••••••••"
         />

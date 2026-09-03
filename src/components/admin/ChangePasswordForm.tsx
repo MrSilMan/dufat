@@ -3,7 +3,8 @@
 import { useActionState } from "react";
 import { changeOwnPassword } from "@/server/actions/team";
 import { initialFormState } from "@/lib/validation";
-import { AdminField, adminInputClass } from "@/components/admin/ui";
+import { AdminField } from "@/components/admin/ui";
+import { PasswordInput } from "@/components/admin/PasswordInput";
 
 /**
  * Replaces the temporary password an admin set.
@@ -22,13 +23,11 @@ export function ChangePasswordForm() {
         errors={state.errors?.password}
         hint="Mínimo 10 caracteres, com pelo menos uma letra e um número."
       >
-        <input
+        <PasswordInput
           id="nova-password"
           name="password"
-          type="password"
           required
           autoComplete="new-password"
-          className={adminInputClass}
           placeholder="••••••••••"
         />
       </AdminField>
@@ -38,13 +37,11 @@ export function ChangePasswordForm() {
         htmlFor="nova-password-confirm"
         errors={state.errors?.confirmPassword}
       >
-        <input
+        <PasswordInput
           id="nova-password-confirm"
           name="confirmPassword"
-          type="password"
           required
           autoComplete="new-password"
-          className={adminInputClass}
           placeholder="••••••••••"
         />
       </AdminField>
