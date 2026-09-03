@@ -54,11 +54,43 @@
       "Read(//etc/letsencrypt/**)",
       "Read(//etc/letsencrypt/renewal/**)",
       "Bash(echo \"=== anything on 3020? ===\"; ss -tlnp 'sport = :3020' | tail -2; echo \"=== compose/systemd/pm2 referencing 3020 ===\"; grep -RIl \"3020\" /root --include=\"*.yml\" --include=\"*.yaml\" --include=\"*.env\" 2>/dev/null | head -5; grep -RIl \"3020\" /home/*/  --include=\"*.yml\" --include=\"*.yaml\" 2>/dev/null | head -5; echo \"=== stopped containers \\(any exited?\\) ===\"; docker ps -a --filter \"status=exited\" --filter \"status=created\" --format '{{.Names}}\\\\t{{.Status}}' | head; echo \"\\(empty = none stopped\\)\"; echo \"=== systemd units mentioning finance ===\"; systemctl list-units --all --no-pager 2>/dev/null | grep -i finance | head -3)",
-      "Read(//home/**)"
+      "Read(//home/**)",
+      "Bash(git push *)",
+      "Bash(gh auth *)",
+      "Bash(grep -c \"^SMTP_HOST=$\" .env)",
+      "Bash(sudo -u postgres psql -d dufat -c \"SELECT a.id, u.email, a.dia, a.\\\\\"inicioEm\\\\\", a.\\\\\"fimEm\\\\\", a.minutos, a.estado, a.\\\\\"registadaEm\\\\\", left\\(a.descricao,40\\) AS descricao FROM \\\\\"Atividade\\\\\" a JOIN \\\\\"User\\\\\" u ON u.id=a.\\\\\"userId\\\\\" ORDER BY a.\\\\\"registadaEm\\\\\" DESC LIMIT 15;\")",
+      "Bash(awk '{print $4, $6, $7, $9, $10}')",
+      "Bash(awk '{print $1, $4, $6, $7, $9, $10}')",
+      "Bash(awk '$9!=200 && $9!=304 {print}')",
+      "Bash(node -e ' *)",
+      "Bash(grep -rho \"registo-.\\\\{0,40\\\\}\" .next/static/chunks/)",
+      "Bash(grep -rho \"\\\\?novo=.\\\\{0,60\\\\}\" .next/static/chunks/)",
+      "Bash(grep -ho \".\\\\{600\\\\}registo-\\\\${f.atividadeId}.\\\\{200\\\\}\" .next/static/chunks/13a-bq3957etg.js)",
+      "Bash(node -e \"console.log\\(require\\('./node_modules/playwright/package.json'\\).version\\)\")",
+      "Bash(node -e \"const p=require\\('./package.json'\\);console.log\\(JSON.stringify\\(p.scripts,null,1\\)\\)\")",
+      "Bash(docker rm *)",
+      "Bash(docker run *)",
+      "Bash(cd /home/deploy/dufat-verify && npx prisma migrate deploy 2>&1 | tail -15)",
+      "Read(//home/deploy/dufat-verify/**)",
+      "Bash(cd /home/deploy/dufat-verify && npm run db:seed 2>&1 | tail -12)",
+      "Bash(cd /home/deploy/dufat-verify && npm run db:seed:premios 2>&1 | tail -20)",
+      "Bash(npx tsx *)",
+      "Bash(PORT=3099 nohup npx next start -p 3099)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://127.0.0.1:3099/equipa/entrar)",
+      "Bash(node verify-registar.mjs)",
+      "Bash(git apply *)",
+      "Bash(cd /home/deploy/dufat-verify && npx prisma migrate deploy 2>&1 | tail -2 && npm run db:seed 2>&1 | tail -3 && npm run build 2>&1 | grep -E \"Compiled|Failed|error|✓\" | tail -6)",
+      "Bash(node verify-eye-2.mjs a32aa20c04bf1bac079bb5e609afd1c0412b0a225c1ee5efb4b1f554801e214f)",
+      "Bash(curl -s -m 20 https://dufat.co.ao/equipa/entrar)",
+      "Bash(curl -s -m 20 https://dufat.co.ao/admin/login)",
+      "Bash(git rev-list *)",
+      "Bash(node -e \"const s=require\\('./.claude/settings.json'\\); console.log\\(Object.keys\\(s\\)\\); console.log\\('allow entries:', s.permissions?.allow?.length\\); console.log\\('additionalDirectories:', s.permissions?.additionalDirectories\\);\")"
     ],
     "additionalDirectories": [
       "/usr/local/sbin",
-      "/etc/systemd/system"
+      "/etc/systemd/system",
+      "/home/deploy/dufat-verify/prisma",
+      "/home/deploy/dufat-verify"
     ]
   }
 }
