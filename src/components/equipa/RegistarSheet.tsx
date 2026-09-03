@@ -4,7 +4,7 @@ import { useActionState, useEffect, useRef, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import { guardarAtividade } from "@/server/actions/atividades";
 import { AdminField, adminInputClass } from "@/components/admin/ui";
-import { initialFormState, type AtividadeFormState } from "@/lib/validation";
+import { initialFormState, type FormState } from "@/lib/validation";
 
 export type CategoriaOpcao = { id: string; nome: string };
 
@@ -31,8 +31,6 @@ type Props = {
   emEdicao: RegistoEmEdicao | null;
   /** Where cancelling or dismissing returns to — the screen it opened over. */
   voltarPara: string;
-  /** Where a *saved* entry lands, highlighted. Always the list. */
-  listaPara: string;
 };
 
 /**
@@ -45,6 +43,11 @@ type Props = {
  * Driven by the URL (`?registar=1`, `?registo=<id>`) so the phone's back
  * gesture closes it, and so a flagged entry's "Justificar" button can link
  * straight into it pre-filled.
+ *
+ * A successful save is *not* handled here: `guardarAtividade` redirects to the
+ * list itself. This component only ever renders the form and whatever the
+ * server said went wrong, so there is no success path that can be lost between
+ * the write and the screen.
  */
 export function RegistarSheet({
   aberto,
@@ -54,11 +57,10 @@ export function RegistarSheet({
   maxDia,
   emEdicao,
   voltarPara,
-  listaPara,
 }: Props) {
   const router = useRouter();
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const [state, action, pending] = useActionState<AtividadeFormState, FormData>(
+  const [state, action, pending] = useActionState<FormState, FormData>(
     guardarAtividade,
     initialFormState,
   );
@@ -71,23 +73,6 @@ export function RegistarSheet({
   }, [aberto]);
 
   const fechar = () => router.push(voltarPara, { scroll: false });
-
-  // A saved entry is the one thing the employee wants to see next, so the sheet
-  // hands the list its id rather than just disappearing — including when it was
-  // opened from Início, where a new entry would otherwise vanish into a
-  // three-item preview.
-  const tratado = useRef<string | null>(null);
-  useEffect(() => {
-    if (!aberto) {
-      tratado.current = null;
-      return;
-    }
-    if (!state.ok || !state.atividadeId || tratado.current === state.atividadeId) return;
-    tratado.current = state.atividadeId;
-    // The hash does the scrolling: the new entry sits inside its own day group,
-    // which on a busy month is well below the fold.
-    router.push(`${listaPara}?novo=${state.atividadeId}#registo-${state.atividadeId}`);
-  }, [aberto, state, router, listaPara]);
 
   const onBackdropClick = (event: MouseEvent<HTMLDialogElement>) => {
     if (event.target === dialogRef.current) fechar();

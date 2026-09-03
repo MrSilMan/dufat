@@ -441,12 +441,6 @@ export type FormState = {
 /** FormState plus the invite link, surfaced when the email could not be sent. */
 export type InviteFormState = FormState & { inviteUrl?: string };
 
-/**
- * FormState plus the id of the row that was written, so the form sheet can send
- * the employee back to the list with that entry highlighted.
- */
-export type AtividadeFormState = FormState & { atividadeId?: string };
-
 export const initialFormState: FormState = { ok: false };
 
 // ---------- Prémio "Funcionário do Mês" ----------

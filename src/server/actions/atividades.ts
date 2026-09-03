@@ -13,7 +13,6 @@ import {
   atividadeSchema,
   folhaAcaoSchema,
   revisaoAtividadeSchema,
-  type AtividadeFormState,
   type FormState,
 } from "@/lib/validation";
 
@@ -92,17 +91,34 @@ async function detetarInconsistencia(input: {
 }
 
 /**
+ * Where a saved entry lands: the list, with that row highlighted and scrolled
+ * to — inside a busy month it sits well below the fold, and on Início it would
+ * otherwise vanish behind a three-item preview.
+ */
+function destinoDoRegisto(atividadeId: string): string {
+  return `/equipa/registos?novo=${atividadeId}#registo-${atividadeId}`;
+}
+
+/**
  * Creates or edits one activity on the author's own sheet.
  *
  * Only drafts and entries sent back for justification can be edited, and only
  * by their author: once something is validated it is evidence behind a score,
  * and letting it be rewritten afterwards would make every past ranking
  * unreproducible.
+ *
+ * On success it redirects rather than returning `ok: true` for the sheet to act
+ * on. The sheet used to navigate from an effect watching the returned state,
+ * which meant a save that reached the database still looked like a failure
+ * whenever that state never landed on the client — the entry was written, the
+ * button stayed on "A guardar…", and the employee re-typed work they had
+ * already filed. A redirect is carried by the action's own response, so the
+ * confirmation cannot be lost separately from the write.
  */
 export async function guardarAtividade(
-  _prev: AtividadeFormState,
+  _prev: FormState,
   formData: FormData,
-): Promise<AtividadeFormState> {
+): Promise<FormState> {
   const session = await requireSession();
 
   const result = atividadeSchema.safeParse(Object.fromEntries(formData));
@@ -160,7 +176,7 @@ export async function guardarAtividade(
     });
 
     revalidarEquipa();
-    return { ok: true, message: "Atividade atualizada.", atividadeId: id };
+    redirect(destinoDoRegisto(id));
   }
 
   const folha = await garantirFolha(session.sub, periodo);
@@ -197,7 +213,7 @@ export async function guardarAtividade(
   });
 
   revalidarEquipa();
-  return { ok: true, message: "Atividade registada.", atividadeId: criada.id };
+  redirect(destinoDoRegisto(criada.id));
 }
 
 /** The employee area is two screens over one sheet; both go stale together. */

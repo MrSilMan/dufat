@@ -231,7 +231,6 @@ export default async function InicioPage({ searchParams }: Props) {
         maxDia={dados.maxDia}
         emEdicao={registoEmEdicao(dados.atividades, params.registo)}
         voltarPara={BASE}
-        listaPara="/equipa/registos"
       />
     </div>
   );
