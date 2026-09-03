@@ -29,6 +29,8 @@ export type AuditAction =
   | "user.role_changed"
   | "user.deactivated"
   | "user.reactivated"
+  | "user.password_reset"
+  | "user.password_changed"
   | "colaborador.atualizado"
   | "atividade.validada"
   | "atividade.questionada"
@@ -71,6 +73,8 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "invite.revoked": "Revogou convite",
   "invite.accepted": "Aceitou convite",
   "user.role_changed": "Alterou permissões",
+  "user.password_reset": "Repôs palavra-passe",
+  "user.password_changed": "Definiu nova palavra-passe",
   "user.deactivated": "Desativou utilizador",
   "user.reactivated": "Reativou utilizador",
   "colaborador.atualizado": "Atualizou ficha de colaborador",

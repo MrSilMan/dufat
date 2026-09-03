@@ -289,6 +289,31 @@ export const acceptInviteSchema = z
     path: ["confirmPassword"],
   });
 
+/**
+ * An admin setting a temporary password for someone who lost theirs.
+ *
+ * Deliberately without a confirmation field: the admin is typing a throwaway
+ * they are about to read out, and the person who has to live with a typo is the
+ * one who will be forced to replace it on the next screen anyway. The strength
+ * rules still apply — a temporary password is a real credential for as long as
+ * it exists.
+ */
+export const resetUserPasswordSchema = z.object({
+  id: z.string().min(1),
+  password: passwordField,
+});
+
+/** Someone replacing the temporary password an admin gave them. */
+export const changeOwnPasswordSchema = z
+  .object({
+    password: passwordField,
+    confirmPassword: z.string(),
+  })
+  .refine((data) => data.password === data.confirmPassword, {
+    message: "As passwords não coincidem",
+    path: ["confirmPassword"],
+  });
+
 // ---------- Site settings ----------
 
 /** Optional free text: "" is kept as "" so the loader can fall back to default. */

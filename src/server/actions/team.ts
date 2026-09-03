@@ -13,6 +13,7 @@ import {
   assertAdminRole,
   assertGestaoRH,
   createSession,
+  getSession,
   generateInviteToken,
   hashInviteToken,
   INVITE_TTL_DAYS,
@@ -21,8 +22,10 @@ import { inviteEmail, isMailConfigured, sendMail } from "@/lib/mail";
 import { findValidInvite } from "@/lib/invites";
 import {
   acceptInviteSchema,
+  changeOwnPasswordSchema,
   inviteIdSchema,
   inviteSchema,
+  resetUserPasswordSchema,
   ROLE_LABELS,
   userActiveSchema,
   userRoleSchema,
@@ -308,6 +311,115 @@ export async function setUserActive(formData: FormData): Promise<void> {
     meta: { email: target.email },
   });
   revalidatePath("/admin/team");
+}
+
+// ---------- Passwords ----------
+
+/**
+ * An admin sets a temporary password for someone who has lost theirs.
+ *
+ * A link would be the better shape, but nothing on this host can send one:
+ * SMTP is unconfigured, so an emailed reset would silently go nowhere and the
+ * admin would be handing over a URL by hand regardless. This gives them
+ * something they can read down a phone, and `mustChangePassword` makes sure it
+ * dies the moment it is used.
+ *
+ * Allowed against any account, including the caller's own and the last
+ * administrator's: unlike deactivation, resetting a password locks nobody out.
+ */
+export async function resetUserPassword(
+  _prev: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const admin = await assertAdminRole();
+
+  const result = resetUserPasswordSchema.safeParse(Object.fromEntries(formData));
+  if (!result.success) return validationError(result.error);
+
+  const target = await prisma.user.findUnique({ where: { id: result.data.id } });
+  if (!target) return { ok: false, message: "Utilizador não encontrado." };
+
+  try {
+    const passwordHash = await bcrypt.hash(result.data.password, 12);
+    await prisma.user.update({
+      where: { id: target.id },
+      data: { passwordHash, mustChangePassword: true },
+    });
+  } catch (error) {
+    logger.error("password_reset_failed", {
+      email: target.email,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return { ok: false, message: "Erro ao repor a palavra-passe. Tente novamente." };
+  }
+
+  // The password itself never reaches the audit log — only that it happened,
+  // and who did it.
+  await recordAudit(admin, {
+    action: "user.password_reset",
+    entity: "User",
+    entityId: target.id,
+    summary: `Repôs a palavra-passe de ${target.name} (${target.email})`,
+    meta: { email: target.email },
+  });
+  logger.info("password_reset", { email: target.email, by: admin.email });
+  revalidatePath("/admin/team");
+
+  return {
+    ok: true,
+    message: `Palavra-passe temporária definida para ${target.name}. Terá de a alterar ao entrar.`,
+  };
+}
+
+/**
+ * Where the temporary password gets replaced by one only its owner knows.
+ *
+ * Guarded on the session cookie plus a fresh row read rather than on
+ * requireSession(), which would bounce the caller straight back to the page
+ * they are already on.
+ */
+export async function changeOwnPassword(
+  _prev: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const session = await getSession();
+  if (!session) redirect("/admin/login");
+
+  const user = await prisma.user.findUnique({
+    where: { id: session.sub },
+    select: { id: true, email: true, name: true, role: true, active: true },
+  });
+  if (!user?.active) redirect("/admin/login");
+
+  const parsed = changeOwnPasswordSchema.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) return validationError(parsed.error);
+
+  try {
+    const passwordHash = await bcrypt.hash(parsed.data.password, 12);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash, mustChangePassword: false },
+    });
+  } catch (error) {
+    logger.error("password_change_failed", {
+      email: user.email,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return { ok: false, message: "Erro ao guardar a palavra-passe. Tente novamente." };
+  }
+
+  await recordAnonymousAudit(
+    { email: user.email, name: user.name, userId: user.id },
+    {
+      action: "user.password_changed",
+      entity: "User",
+      entityId: user.id,
+      summary: `${user.name} definiu uma nova palavra-passe`,
+    },
+  );
+  logger.info("password_changed", { email: user.email });
+
+  redirect(areaInicial(user.role));
 }
 
 /** True when `userId` is the only remaining active admin. */

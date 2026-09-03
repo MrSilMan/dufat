@@ -35,22 +35,26 @@ enum InviteStatus {
 }
 
 model User {
-  id           String     @id @default(cuid())
-  email        String     @unique
-  name         String
-  passwordHash String
+  id                 String     @id @default(cuid())
+  email              String     @unique
+  name               String
+  passwordHash       String
   /// Defaults to the least privilege: invited teammates are editors unless an
   /// admin says otherwise. The seeded owner account is created as ADMIN.
-  role         Role       @default(EDITOR)
+  role               Role       @default(EDITOR)
   /// Deactivated users keep their audit trail but cannot sign in.
-  active       Boolean    @default(true)
-  lastLoginAt  DateTime?
+  active             Boolean    @default(true)
+  /// Set when an admin resets a forgotten password. While true every guard
+  /// diverts the user to /…/repor, so the temporary password the admin knows
+  /// buys access to nothing except the screen that replaces it.
+  mustChangePassword Boolean    @default(false)
+  lastLoginAt        DateTime?
   /// The invite this user signed up through; null for the seeded admin.
-  invitedById  String?
-  invitedBy    User?      @relation("UserInvites", fields: [invitedById], references: [id], onDelete: SetNull)
-  invitedUsers User[]     @relation("UserInvites")
-  auditLogs    AuditLog[]
-  invitesSent  Invite[]   @relation("InviteCreatedBy")
+  invitedById        String?
+  invitedBy          User?      @relation("UserInvites", fields: [invitedById], references: [id], onDelete: SetNull)
+  invitedUsers       User[]     @relation("UserInvites")
+  auditLogs          AuditLog[]
+  invitesSent        Invite[]   @relation("InviteCreatedBy")
 
   // ---- Employee record (award module) ----
   /// Job role. Null for accounts that are not scored (a pure catalogue editor).

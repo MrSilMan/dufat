@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getSession } from "@/lib/auth";
+import { caminhoReporPassword, getSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { getSiteSettings } from "@/lib/settings";
 import { logout } from "@/server/actions/auth";
@@ -45,9 +45,14 @@ export default async function EquipaLayout({ children }: { children: React.React
   // must lose access on the next request rather than at token expiry.
   const user = await prisma.user.findUnique({
     where: { id: cookieSession.sub },
-    select: { id: true, name: true, active: true },
+    select: { id: true, name: true, active: true, role: true, mustChangePassword: true },
   });
   if (!user?.active) redirect("/equipa/entrar");
+
+  // Repeated here rather than inherited: this area guards itself instead of
+  // going through requireSession(), so the password gate has to be stated in
+  // both places or /equipa becomes the way around it.
+  if (user.mustChangePassword) redirect(caminhoReporPassword(user.role));
 
   // Any signed-in account, not just COLABORADOR: a Gestor de RH who also holds
   // a cargo has a sheet of their own to fill in, and this is where it lives.

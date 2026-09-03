@@ -95,12 +95,25 @@ export async function requireSession(loginPath = "/admin/login"): Promise<Sessio
 
   const user = await prisma.user.findUnique({
     where: { id: session.sub },
-    select: { id: true, email: true, name: true, role: true, active: true },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      role: true,
+      active: true,
+      mustChangePassword: true,
+    },
   });
   if (!user || !user.active) {
     await destroySession();
     redirect(loginPath);
   }
+
+  // A password an admin chose and read out loud is a shared secret, so it opens
+  // exactly one door: the one that replaces it. Enforced on the row rather than
+  // in the session token, so a reset takes hold on the next request even for
+  // someone already signed in.
+  if (user.mustChangePassword) redirect(caminhoReporPassword(user.role));
 
   return { sub: user.id, email: user.email, name: user.name, role: user.role };
 }
@@ -186,6 +199,18 @@ export function podeVerTodosOsScores(role: Role): boolean {
  */
 export function areaInicial(role: Role): string {
   return role === "COLABORADOR" ? "/equipa" : "/admin";
+}
+
+/**
+ * Where someone carrying an admin-set temporary password must go first.
+ *
+ * Split by role for the same reason as {@link areaInicial}: an employee should
+ * never be shown a page badged "Administração". Both routes sit outside their
+ * area's guarded layout, or the guard that sends people here would send them
+ * here again on arrival.
+ */
+export function caminhoReporPassword(role: Role): string {
+  return role === "COLABORADOR" ? "/equipa/repor" : "/admin/repor";
 }
 
 // ---------- Invite tokens ----------

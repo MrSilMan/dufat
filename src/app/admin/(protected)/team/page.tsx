@@ -4,6 +4,7 @@ import { requireAdminRole } from "@/lib/auth";
 import { isMailConfigured } from "@/lib/mail";
 import { formatDate } from "@/lib/format";
 import { revokeInvite, setUserActive } from "@/server/actions/team";
+import { ResetPasswordForm } from "@/components/admin/ResetPasswordForm";
 import {
   ActiveBadge,
   EmptyState,
@@ -240,7 +241,15 @@ export default async function AdminTeamPage() {
                           )}
                         </td>
                         <td className="px-5 py-3.5">
-                          <div className="flex justify-end">
+                          <div className="flex flex-wrap items-start justify-end gap-2">
+                            {/* Offered even for the caller's own row and the last
+                                admin's: unlike deactivation, a reset locks nobody
+                                out, and it is the only way an admin who forgot
+                                their own password can set a new one. Withheld from
+                                deactivated accounts, which cannot sign in anyway. */}
+                            {member.active && (
+                              <ResetPasswordForm userId={member.id} userName={member.name} />
+                            )}
                             {isSelf || isLastAdmin ? (
                               <span className="text-xs text-a-faint" title={lockReason}>
                                 —
