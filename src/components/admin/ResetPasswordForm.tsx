@@ -18,8 +18,10 @@ function gerarPassword(): string {
   const digitos = "23456789";
   const simbolos = "!@#$%&*";
   const alfabeto = letras + digitos + simbolos;
-  const bytes = crypto.getRandomValues(new Uint32Array(14));
-  const corpo = Array.from(bytes, (b) => alfabeto[b % alfabeto.length]).join("");
+  const bytes = crypto.getRandomValues(new Uint32Array(8));
+  const corpo = Array.from(bytes.subarray(2), (b) => alfabeto[b % alfabeto.length]).join("");
+  // Eight characters: a letter, six free, a digit. Short because it is dictated
+  // out loud, and it only has to survive until the first login replaces it.
   // Guarantee the letter and digit the schema demands rather than trusting luck.
   return `${letras[bytes[0]! % letras.length]}${corpo}${digitos[bytes[1]! % digitos.length]}`;
 }
@@ -28,8 +30,8 @@ function gerarPassword(): string {
  * Shows the temporary password once it has been saved, next to a copy button.
  *
  * It is never recoverable afterwards — only its hash is stored — so this is the
- * single moment the admin can take it, and reading fourteen mixed-case
- * characters off a screen into a chat window is exactly where they get mangled.
+ * single moment the admin can take it, and reading mixed-case characters off a
+ * screen into a chat window is exactly where they get mangled.
  */
 function PasswordGuardada({ password }: { password: string }) {
   const [copiado, setCopiado] = useState(false);

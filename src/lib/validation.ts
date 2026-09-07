@@ -270,18 +270,29 @@ export const userActiveSchema = z.object({
   active: z.stringbool(),
 });
 
-/** Password rules for accepting an invite. */
-const passwordField = z
-  .string()
-  .min(10, "A password deve ter pelo menos 10 caracteres")
-  .max(200, "Password demasiado longa")
-  .refine((value) => /[a-zA-Z]/.test(value), "A password deve incluir pelo menos uma letra")
-  .refine((value) => /\d/.test(value), "A password deve incluir pelo menos um número");
+/**
+ * Password rules. The minimum is a parameter because the two kinds of password
+ * are not the same credential: one is kept, the other is read out loud once and
+ * dies at the next login.
+ */
+const passwordField = (min: number) =>
+  z
+    .string()
+    .min(min, `A password deve ter pelo menos ${min} caracteres`)
+    .max(200, "Password demasiado longa")
+    .refine((value) => /[a-zA-Z]/.test(value), "A password deve incluir pelo menos uma letra")
+    .refine((value) => /\d/.test(value), "A password deve incluir pelo menos um número");
+
+/** A password its owner will keep. */
+const senhaDefinitiva = passwordField(10);
+
+/** A throwaway an admin hands over; replaced on the next login. */
+const senhaTemporaria = passwordField(8);
 
 export const acceptInviteSchema = z
   .object({
     token: z.string().min(1),
-    password: passwordField,
+    password: senhaDefinitiva,
     confirmPassword: z.string(),
   })
   .refine((data) => data.password === data.confirmPassword, {
@@ -300,13 +311,13 @@ export const acceptInviteSchema = z
  */
 export const resetUserPasswordSchema = z.object({
   id: z.string().min(1),
-  password: passwordField,
+  password: senhaTemporaria,
 });
 
 /** Someone replacing the temporary password an admin gave them. */
 export const changeOwnPasswordSchema = z
   .object({
-    password: passwordField,
+    password: senhaDefinitiva,
     confirmPassword: z.string(),
   })
   .refine((data) => data.password === data.confirmPassword, {
