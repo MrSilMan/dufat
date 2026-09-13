@@ -11,6 +11,7 @@ import {
   IconClipboard,
   IconGauge,
   IconInbox,
+  IconReceipt,
   IconSettings,
   IconShield,
   IconTrophy,
@@ -33,6 +34,11 @@ type NavItem = {
   icon: IconComponent;
   exact?: boolean;
   roles: RoleValue[];
+  /**
+   * Daily-report entries also need the admin's grant, on top of the role —
+   * without it the person must not see the feature named at all.
+   */
+  relatorios?: "registar" | "ver";
 };
 
 type Group = {
@@ -100,6 +106,37 @@ const NAV: Entrada[] = [
     ],
   },
   {
+    id: "relatorios",
+    label: "Vendas e despesas",
+    icon: IconReceipt,
+    children: [
+      {
+        href: "/equipa/relatorios",
+        label: "Os meus relatórios",
+        icon: IconReceipt,
+        roles: TODOS,
+        relatorios: "registar",
+      },
+      // Granted viewers read the team's reports in their own area; the admin
+      // has the fuller back-office list just below instead.
+      {
+        href: "/equipa/relatorios/equipa",
+        label: "Relatórios da equipa",
+        icon: IconReceipt,
+        roles: ["GESTOR_RH", "EDITOR", "COLABORADOR"],
+        relatorios: "ver",
+      },
+      { href: "/admin/relatorios", label: "Relatórios diários", icon: IconReceipt, roles: SO_ADMIN },
+      { href: "/admin/relatorios/acessos", label: "Acessos", icon: IconShield, roles: SO_ADMIN },
+      {
+        href: "/admin/relatorios/metodos",
+        label: "Métodos de pagamento",
+        icon: IconSettings,
+        roles: SO_ADMIN,
+      },
+    ],
+  },
+  {
     id: "sistema",
     label: "Sistema",
     icon: IconSettings,
@@ -116,6 +153,8 @@ type Props = {
   /** Number of quote requests with status NEW, shown as a badge on "Orçamentos". */
   newQuotes?: number;
   role?: RoleValue;
+  /** The person's daily-report grants (an admin has both). */
+  acessoRelatorios?: { registar: boolean; ver: boolean };
 };
 
 function CountBadge({ count, active }: { count: number; active: boolean }) {
@@ -131,12 +170,18 @@ function CountBadge({ count, active }: { count: number; active: boolean }) {
   );
 }
 
-/** Filters by role, then flattens any group left with fewer than two children. */
-function visiveis(role: RoleValue): Entrada[] {
-  return NAV.flatMap<Entrada>((entrada) => {
-    if (!isGroup(entrada)) return entrada.roles.includes(role) ? [entrada] : [];
+type Acesso = NonNullable<Props["acessoRelatorios"]>;
 
-    const children = entrada.children.filter((child) => child.roles.includes(role));
+function permitido(item: NavItem, role: RoleValue, acesso: Acesso): boolean {
+  return item.roles.includes(role) && (!item.relatorios || acesso[item.relatorios]);
+}
+
+/** Filters by role and grant, then flattens any group left with fewer than two children. */
+function visiveis(role: RoleValue, acesso: Acesso): Entrada[] {
+  return NAV.flatMap<Entrada>((entrada) => {
+    if (!isGroup(entrada)) return permitido(entrada, role, acesso) ? [entrada] : [];
+
+    const children = entrada.children.filter((child) => permitido(child, role, acesso));
     if (children.length === 0) return [];
     if (children.length === 1) return [{ ...children[0]!, icon: entrada.icon }];
     return [{ ...entrada, children }];
@@ -147,10 +192,15 @@ function folhas(entradas: Entrada[]): NavItem[] {
   return entradas.flatMap((entrada) => (isGroup(entrada) ? entrada.children : [entrada]));
 }
 
-export function AdminNav({ variant = "sidebar", newQuotes = 0, role = "COLABORADOR" }: Props) {
+export function AdminNav({
+  variant = "sidebar",
+  newQuotes = 0,
+  role = "COLABORADOR",
+  acessoRelatorios = { registar: false, ver: false },
+}: Props) {
   const pathname = usePathname();
 
-  const entradas = visiveis(role);
+  const entradas = visiveis(role, acessoRelatorios);
 
   // Most specific match wins, so /admin/premios/definicoes highlights "Parâmetros
   // do prémio" alone and not also "Prémios", which is a prefix of it.

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { requireSession } from "@/lib/auth";
+import { acessoRelatorios } from "@/lib/relatorios/acesso";
 import { getSiteSettings } from "@/lib/settings";
 import { logout } from "@/server/actions/auth";
 import { DufatLogo } from "@/components/brand/DufatLogo";
@@ -30,7 +31,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   // by role in the layout would bounce an employee off the one page that is
   // theirs, since it lives inside this same shell.
   const session = await requireSession();
-  const settings = await getSiteSettings();
+  const [settings, acesso] = await Promise.all([getSiteSettings(), acessoRelatorios(session)]);
+  const acessoNav = { registar: acesso.registar, ver: acesso.ver };
   const podeVerOrcamentos = session.role === "ADMIN" || session.role === "EDITOR";
   const newQuotes = podeVerOrcamentos
     ? await prisma.quoteRequest.count({ where: { status: "NEW" } }).catch(() => 0)
@@ -48,7 +50,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         </div>
 
         <div className="flex-1 overflow-y-auto px-3 py-2">
-          <AdminNav newQuotes={newQuotes} role={session.role} />
+          <AdminNav newQuotes={newQuotes} role={session.role} acessoRelatorios={acessoNav} />
         </div>
 
         <div className="space-y-1 p-3">
@@ -118,7 +120,12 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             </div>
           </div>
           <div className="px-5 pb-3">
-            <AdminNav variant="bar" newQuotes={newQuotes} role={session.role} />
+            <AdminNav
+              variant="bar"
+              newQuotes={newQuotes}
+              role={session.role}
+              acessoRelatorios={acessoNav}
+            />
           </div>
         </header>
 

@@ -52,7 +52,14 @@ export type AuditAction =
   | "organizacao.departamento_desativado"
   | "organizacao.categoria_criada"
   | "organizacao.categoria_atualizada"
-  | "organizacao.categoria_desativada";
+  | "organizacao.categoria_desativada"
+  | "metodo_pagamento.criado"
+  | "metodo_pagamento.atualizado"
+  | "metodo_pagamento.desativado"
+  | "metodo_pagamento.reativado"
+  | "relatorio.finalizado"
+  | "relatorio.reaberto"
+  | "relatorio.acesso_alterado";
 
 /** Portuguese labels for the audit table and its filter dropdown. */
 export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
@@ -99,6 +106,13 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "organizacao.categoria_criada": "Criou categoria de atividade",
   "organizacao.categoria_atualizada": "Editou categoria de atividade",
   "organizacao.categoria_desativada": "Desativou categoria de atividade",
+  "metodo_pagamento.criado": "Criou método de pagamento",
+  "metodo_pagamento.atualizado": "Editou método de pagamento",
+  "metodo_pagamento.desativado": "Desativou método de pagamento",
+  "metodo_pagamento.reativado": "Reativou método de pagamento",
+  "relatorio.finalizado": "Finalizou relatório diário",
+  "relatorio.reaberto": "Reabriu relatório diário",
+  "relatorio.acesso_alterado": "Alterou acesso aos relatórios",
 };
 
 /** Groups actions for the audit page's category filter. */
@@ -151,6 +165,17 @@ export const AUDIT_GROUPS: Record<string, AuditAction[]> = {
     "organizacao.categoria_criada",
     "organizacao.categoria_atualizada",
     "organizacao.categoria_desativada",
+  ],
+  // Individual line edits live in RelatorioHistorico, written in the same
+  // transaction as the change; only the report's lifecycle is mirrored here.
+  "Relatórios diários": [
+    "metodo_pagamento.criado",
+    "metodo_pagamento.atualizado",
+    "metodo_pagamento.desativado",
+    "metodo_pagamento.reativado",
+    "relatorio.finalizado",
+    "relatorio.reaberto",
+    "relatorio.acesso_alterado",
   ],
 };
 

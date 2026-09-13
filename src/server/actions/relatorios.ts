@@ -1,0 +1,798 @@
+"use server";
+
+import { z } from "zod";
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import type { Prisma } from "@/generated/prisma/client";
+import { prisma } from "@/lib/db";
+import { logger } from "@/lib/logger";
+import { recordAudit } from "@/lib/audit";
+import { assertAdminRole, requireSession, type Session } from "@/lib/auth";
+import { formatCentimos, parseValorCentimos } from "@/lib/relatorios/dinheiro";
+import { diaParaDate, hojeLuanda, isDia, rotuloDiaCurto, dateParaDia } from "@/lib/relatorios/dia";
+import { calcularTotais, type LinhaVista } from "@/lib/relatorios/resumo";
+import { SELECT_LINHA, vistaLinha } from "@/lib/relatorios/queries";
+import { acessoRelatorios, podeVerRelatorio } from "@/lib/relatorios/acesso";
+import {
+  abrirRelatorioSchema,
+  acessoRelatoriosSchema,
+  alternarMetodoPagamentoSchema,
+  apagarLinhaSchema,
+  finalizarRelatorioSchema,
+  linhaRelatorioSchema,
+  metodoPagamentoSchema,
+  reabrirRelatorioSchema,
+  type FormState,
+} from "@/lib/validation";
+
+type Tx = Prisma.TransactionClient;
+
+function validationError(error: z.ZodError): FormState {
+  return {
+    ok: false,
+    message: "Verifique os campos assinalados.",
+    errors: z.flattenError(error).fieldErrors as Record<string, string[]>,
+  };
+}
+
+function codigoPrisma(error: unknown): string | undefined {
+  return typeof error === "object" && error !== null
+    ? (error as { code?: string }).code
+    : undefined;
+}
+
+// ---------- Autosave results ----------
+
+/**
+ * Why a write was refused, in a shape the editor can act on without parsing a
+ * message: a conflict carries the row as the server now has it, so the screen
+ * can offer "keep mine" or "use the saved one" instead of just failing.
+ */
+export type FalhaRelatorio =
+  | { ok: false; codigo: "VALIDACAO"; message: string; errors: Record<string, string[]> }
+  /** `atual` is null when the line was deleted elsewhere. */
+  | { ok: false; codigo: "CONFLITO"; message: string; atual: LinhaVista | null }
+  | { ok: false; codigo: "FECHADO" | "NAO_ENCONTRADO" | "SEM_ACESSO" | "ERRO"; message: string };
+
+export type ResultadoLinha =
+  | { ok: true; linha: LinhaVista; versaoRelatorio: number }
+  | FalhaRelatorio;
+
+export type ResultadoApagar = { ok: true; versaoRelatorio: number } | FalhaRelatorio;
+
+export type ResultadoFinalizar = { ok: true } | FalhaRelatorio;
+
+export type EntradaLinha = z.input<typeof linhaRelatorioSchema>;
+
+/**
+ * Thrown inside a transaction to roll it back and hand a result to the caller.
+ * A plain `return` would commit whatever the transaction had already written.
+ */
+class Recusa extends Error {
+  constructor(readonly resultado: FalhaRelatorio) {
+    super(resultado.message);
+  }
+}
+
+const recusar = (codigo: "FECHADO" | "NAO_ENCONTRADO", message: string) =>
+  new Recusa({ ok: false, codigo, message });
+
+const conflito = (atual: LinhaVista | null, message: string) =>
+  new Recusa({ ok: false, codigo: "CONFLITO", message, atual });
+
+const FALHA_GENERICA: FalhaRelatorio = {
+  ok: false,
+  codigo: "ERRO",
+  message: "Não foi possível guardar. Tente de novo.",
+};
+
+const MSG_FECHADO = "Este relatório já foi finalizado e não pode ser alterado.";
+
+const SEM_ACESSO: FalhaRelatorio = {
+  ok: false,
+  codigo: "SEM_ACESSO",
+  message: "Deixou de ter acesso aos relatórios. Fale com o administrador.",
+};
+
+/**
+ * Keeping reports needs the admin's grant, checked on every write rather than
+ * only when the page loads: access removed while an editor is open must stop
+ * the very next save.
+ */
+async function podeRegistar(session: Session): Promise<boolean> {
+  return (await acessoRelatorios(session)).registar;
+}
+
+/** What a history row records about a line — the amount as a plain number. */
+function instantaneo(linha: {
+  tipo: string;
+  descricao: string;
+  valorCentimos: number;
+  metodoPagamentoId: string;
+  metodoPagamentoNome: string;
+}): Prisma.InputJsonObject {
+  return {
+    tipo: linha.tipo,
+    descricao: linha.descricao,
+    valorCentimos: linha.valorCentimos,
+    metodoPagamentoId: linha.metodoPagamentoId,
+    metodoPagamentoNome: linha.metodoPagamentoNome,
+  };
+}
+
+/**
+ * Loads a report for writing by its author. Admins read every report but do
+ * not write lines into someone else's: the figures are the colaborador's.
+ */
+async function relatorioDoAutor(tx: Tx, relatorioId: string, session: Session) {
+  const relatorio = await tx.relatorioDiario.findUnique({
+    where: { id: relatorioId },
+    select: { userId: true, estado: true, versao: true },
+  });
+  if (!relatorio || relatorio.userId !== session.sub) {
+    throw recusar("NAO_ENCONTRADO", "Relatório não encontrado.");
+  }
+  if (relatorio.estado !== "RASCUNHO") throw recusar("FECHADO", MSG_FECHADO);
+  return relatorio;
+}
+
+/**
+ * Bumps the report's version, and is the gate every line write passes through.
+ *
+ * The conditional update takes the report's row lock, so it serialises against
+ * `finalizarRelatorio` (which updates the same row): a line write racing a
+ * finalization either commits first — and the finalization then fails its
+ * version check — or finds the report already FINALIZADO and rolls back.
+ */
+async function avancarVersao(tx: Tx, relatorioId: string): Promise<number> {
+  const { count } = await tx.relatorioDiario.updateMany({
+    where: { id: relatorioId, estado: "RASCUNHO" },
+    data: { versao: { increment: 1 } },
+  });
+  if (count === 0) throw recusar("FECHADO", MSG_FECHADO);
+  const { versao } = await tx.relatorioDiario.findUniqueOrThrow({
+    where: { id: relatorioId },
+    select: { versao: true },
+  });
+  return versao;
+}
+
+/** A method chosen for a line must still be offered. */
+async function metodoAtivo(tx: Tx, id: string) {
+  const metodo = await tx.metodoPagamento.findUnique({
+    where: { id },
+    select: { nome: true, ativo: true },
+  });
+  if (!metodo?.ativo) {
+    const message = "Este método de pagamento já não está disponível. Escolha outro.";
+    throw new Recusa({
+      ok: false,
+      codigo: "VALIDACAO",
+      message,
+      errors: { metodoPagamentoId: [message] },
+    });
+  }
+  return metodo;
+}
+
+function mesmoConteudo(
+  linha: LinhaVista,
+  dados: { tipo: string; descricao: string; metodoPagamentoId: string },
+  valorCentimos: number,
+): boolean {
+  return (
+    linha.tipo === dados.tipo &&
+    linha.descricao === dados.descricao &&
+    linha.valorCentimos === valorCentimos &&
+    linha.metodoPagamentoId === dados.metodoPagamentoId
+  );
+}
+
+// ---------- Colaborador: lines ----------
+
+/**
+ * Creates or edits one line — called by the editor as the colaborador works.
+ *
+ * Returns a result instead of redirecting, unlike `guardarAtividade`: autosave
+ * runs in the background while the person keeps typing, and needs the new
+ * versions back to base its next save on.
+ *
+ * Two safeguards make the autosave safe to retry and safe across tabs:
+ *
+ *   - the line id is generated by the browser, so a save whose response was
+ *     lost and is sent again finds the row it already wrote;
+ *   - edits name the `versao` they were based on, so a tab holding an older
+ *     copy is told about the newer one rather than silently overwriting it.
+ */
+export async function guardarLinha(input: EntradaLinha): Promise<ResultadoLinha> {
+  const session = await requireSession("/equipa/entrar");
+  if (!(await podeRegistar(session))) return SEM_ACESSO;
+
+  const result = linhaRelatorioSchema.safeParse(input);
+  if (!result.success) {
+    return { ...validationError(result.error), ok: false, codigo: "VALIDACAO" } as FalhaRelatorio;
+  }
+  const dados = result.data;
+
+  const valorCentimos = parseValorCentimos(dados.valor);
+  if (valorCentimos === null || valorCentimos <= 0) {
+    const message = "Valor inválido (ex.: 1 500,00).";
+    return { ok: false, codigo: "VALIDACAO", message, errors: { valor: [message] } };
+  }
+
+  // Twice at most: a retried create can collide on the primary key with the
+  // original request still in flight, and on the second pass it finds that row.
+  for (let tentativa = 0; tentativa < 2; tentativa += 1) {
+    try {
+      return await prisma.$transaction((tx) => escreverLinha(tx, session, dados, valorCentimos));
+    } catch (error) {
+      if (error instanceof Recusa) return error.resultado;
+      if (codigoPrisma(error) === "P2002" && tentativa === 0) continue;
+      logger.error("relatorio_linha_falhou", {
+        relatorioId: dados.relatorioId,
+        linhaId: dados.id,
+        by: session.email,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return FALHA_GENERICA;
+    }
+  }
+  return FALHA_GENERICA;
+}
+
+async function escreverLinha(
+  tx: Tx,
+  session: Session,
+  dados: z.output<typeof linhaRelatorioSchema>,
+  valorCentimos: number,
+): Promise<ResultadoLinha> {
+  const relatorio = await relatorioDoAutor(tx, dados.relatorioId, session);
+
+  const existente = await tx.linhaRelatorio.findUnique({
+    where: { id: dados.id },
+    select: { ...SELECT_LINHA, relatorioId: true },
+  });
+  if (existente && existente.relatorioId !== dados.relatorioId) {
+    throw recusar("NAO_ENCONTRADO", "Linha não encontrada.");
+  }
+
+  if (!existente) {
+    // The client believed this line was saved; it has since been deleted
+    // elsewhere. Recreating it silently would undo that deletion.
+    if (dados.versao !== null) {
+      throw conflito(null, "Esta linha foi apagada noutra janela.");
+    }
+
+    const metodo = await metodoAtivo(tx, dados.metodoPagamentoId);
+    const criada = await tx.linhaRelatorio.create({
+      data: {
+        id: dados.id,
+        relatorioId: dados.relatorioId,
+        tipo: dados.tipo,
+        descricao: dados.descricao,
+        valorCentimos: BigInt(valorCentimos),
+        metodoPagamentoId: dados.metodoPagamentoId,
+        metodoPagamentoNome: metodo.nome,
+      },
+      select: SELECT_LINHA,
+    });
+    const linha = vistaLinha(criada);
+
+    await tx.relatorioHistorico.create({
+      data: {
+        relatorioId: dados.relatorioId,
+        linhaId: linha.id,
+        acao: "LINHA_ADICIONADA",
+        depois: instantaneo(linha),
+        userId: session.sub,
+        userName: session.name,
+      },
+    });
+
+    return { ok: true, linha, versaoRelatorio: await avancarVersao(tx, dados.relatorioId) };
+  }
+
+  const anterior = vistaLinha(existente);
+
+  if (dados.versao === null) {
+    // A create sent again after its response was lost. Same content: that is
+    // the row this request already wrote.
+    if (mesmoConteudo(anterior, dados, valorCentimos)) {
+      return { ok: true, linha: anterior, versaoRelatorio: relatorio.versao };
+    }
+    throw conflito(anterior, "Esta linha já tinha sido guardada com outros valores.");
+  }
+
+  if (anterior.versao !== dados.versao) {
+    throw conflito(anterior, "Esta linha foi alterada noutra janela.");
+  }
+
+  // Autosave fires on blur too; an unchanged line is not an edit, and must not
+  // fill the history with rows that say nothing happened.
+  if (mesmoConteudo(anterior, dados, valorCentimos)) {
+    return { ok: true, linha: anterior, versaoRelatorio: relatorio.versao };
+  }
+
+  // Keeping the method keeps its recorded name, even if the method has since
+  // been retired or renamed; only a newly chosen method must be active.
+  const metodoPagamentoNome =
+    dados.metodoPagamentoId === anterior.metodoPagamentoId
+      ? anterior.metodoPagamentoNome
+      : (await metodoAtivo(tx, dados.metodoPagamentoId)).nome;
+
+  const { count } = await tx.linhaRelatorio.updateMany({
+    where: { id: dados.id, versao: dados.versao },
+    data: {
+      tipo: dados.tipo,
+      descricao: dados.descricao,
+      valorCentimos: BigInt(valorCentimos),
+      metodoPagamentoId: dados.metodoPagamentoId,
+      metodoPagamentoNome,
+      versao: { increment: 1 },
+    },
+  });
+  if (count === 0) {
+    const atual = await tx.linhaRelatorio.findUnique({
+      where: { id: dados.id },
+      select: SELECT_LINHA,
+    });
+    throw conflito(atual ? vistaLinha(atual) : null, "Esta linha foi alterada noutra janela.");
+  }
+
+  const linha: LinhaVista = {
+    id: dados.id,
+    tipo: dados.tipo,
+    descricao: dados.descricao,
+    valorCentimos,
+    metodoPagamentoId: dados.metodoPagamentoId,
+    metodoPagamentoNome,
+    versao: dados.versao + 1,
+  };
+
+  await tx.relatorioHistorico.create({
+    data: {
+      relatorioId: dados.relatorioId,
+      linhaId: linha.id,
+      acao: "LINHA_EDITADA",
+      antes: instantaneo(anterior),
+      depois: instantaneo(linha),
+      userId: session.sub,
+      userName: session.name,
+    },
+  });
+
+  return { ok: true, linha, versaoRelatorio: await avancarVersao(tx, dados.relatorioId) };
+}
+
+/** Deletes one line from a draft. Deleting a line that is already gone succeeds. */
+export async function apagarLinha(
+  input: z.input<typeof apagarLinhaSchema>,
+): Promise<ResultadoApagar> {
+  const session = await requireSession("/equipa/entrar");
+  if (!(await podeRegistar(session))) return SEM_ACESSO;
+
+  const result = apagarLinhaSchema.safeParse(input);
+  if (!result.success) return { ...FALHA_GENERICA, message: "Pedido inválido." };
+  const dados = result.data;
+
+  try {
+    return await prisma.$transaction(async (tx): Promise<ResultadoApagar> => {
+      const relatorio = await relatorioDoAutor(tx, dados.relatorioId, session);
+
+      const existente = await tx.linhaRelatorio.findUnique({
+        where: { id: dados.id },
+        select: { ...SELECT_LINHA, relatorioId: true },
+      });
+      if (!existente) return { ok: true, versaoRelatorio: relatorio.versao };
+      if (existente.relatorioId !== dados.relatorioId) {
+        throw recusar("NAO_ENCONTRADO", "Linha não encontrada.");
+      }
+
+      const anterior = vistaLinha(existente);
+      if (anterior.versao !== dados.versao) {
+        throw conflito(anterior, "Esta linha foi alterada noutra janela antes de a apagar.");
+      }
+
+      const { count } = await tx.linhaRelatorio.deleteMany({
+        where: { id: dados.id, versao: dados.versao },
+      });
+      if (count === 0) {
+        const atual = await tx.linhaRelatorio.findUnique({
+          where: { id: dados.id },
+          select: SELECT_LINHA,
+        });
+        if (!atual) return { ok: true, versaoRelatorio: relatorio.versao };
+        throw conflito(vistaLinha(atual), "Esta linha foi alterada noutra janela antes de a apagar.");
+      }
+
+      await tx.relatorioHistorico.create({
+        data: {
+          relatorioId: dados.relatorioId,
+          linhaId: dados.id,
+          acao: "LINHA_APAGADA",
+          antes: instantaneo(anterior),
+          userId: session.sub,
+          userName: session.name,
+        },
+      });
+
+      return { ok: true, versaoRelatorio: await avancarVersao(tx, dados.relatorioId) };
+    });
+  } catch (error) {
+    if (error instanceof Recusa) return error.resultado;
+    logger.error("relatorio_apagar_linha_falhou", {
+      relatorioId: dados.relatorioId,
+      linhaId: dados.id,
+      by: session.email,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return FALHA_GENERICA;
+  }
+}
+
+// ---------- Colaborador: report lifecycle ----------
+
+/**
+ * Opens the report for a day, creating the draft on first use.
+ *
+ * Past days are allowed — a shift that ended after closing is filed the next
+ * morning — but not future ones, measured against today in Luanda rather than
+ * the server's clock.
+ */
+export async function abrirRelatorio(_prev: FormState, formData: FormData): Promise<FormState> {
+  const session = await requireSession("/equipa/entrar");
+  if (!(await podeRegistar(session))) return { ok: false, message: SEM_ACESSO.message };
+
+  const result = abrirRelatorioSchema.safeParse(Object.fromEntries(formData));
+  if (!result.success) return validationError(result.error);
+  const { dia } = result.data;
+
+  if (!isDia(dia)) {
+    return { ok: false, message: "Data inválida.", errors: { dia: ["Data inválida."] } };
+  }
+  if (dia > hojeLuanda()) {
+    const message = "Não pode criar relatórios para datas futuras.";
+    return { ok: false, message, errors: { dia: [message] } };
+  }
+
+  const chave = { userId_dia: { userId: session.sub, dia: diaParaDate(dia) } };
+  let id: string;
+  try {
+    ({ id } = await prisma.relatorioDiario.upsert({
+      where: chave,
+      create: { userId: session.sub, dia: diaParaDate(dia) },
+      update: {},
+      select: { id: true },
+    }));
+  } catch (error) {
+    // Two tabs opening the same day at once: the other one created it.
+    if (codigoPrisma(error) !== "P2002") throw error;
+    ({ id } = await prisma.relatorioDiario.findUniqueOrThrow({ where: chave, select: { id: true } }));
+  }
+
+  revalidatePath("/equipa/relatorios");
+  redirect(`/equipa/relatorios/${id}`);
+}
+
+/**
+ * Closes a draft for good (until an admin reopens it).
+ *
+ * `versao` must match: a tab that has not seen lines added in another tab would
+ * otherwise finalize a report whose totals it has never shown its user.
+ */
+export async function finalizarRelatorio(
+  input: z.input<typeof finalizarRelatorioSchema>,
+): Promise<ResultadoFinalizar> {
+  const session = await requireSession("/equipa/entrar");
+  if (!(await podeRegistar(session))) return SEM_ACESSO;
+
+  const result = finalizarRelatorioSchema.safeParse(input);
+  if (!result.success) return { ...FALHA_GENERICA, message: "Pedido inválido." };
+  const { id, versao } = result.data;
+
+  let resumo: { dia: string; linhas: number; saldo: number };
+  try {
+    resumo = await prisma.$transaction(async (tx) => {
+      const relatorio = await tx.relatorioDiario.findUnique({
+        where: { id },
+        select: { userId: true, estado: true, dia: true },
+      });
+      if (!relatorio || relatorio.userId !== session.sub) {
+        throw recusar("NAO_ENCONTRADO", "Relatório não encontrado.");
+      }
+      if (relatorio.estado !== "RASCUNHO") {
+        throw recusar("FECHADO", "Este relatório já estava finalizado.");
+      }
+
+      const { count } = await tx.relatorioDiario.updateMany({
+        where: { id, estado: "RASCUNHO", versao },
+        data: {
+          estado: "FINALIZADO",
+          finalizadoEm: new Date(),
+          finalizadoPorId: session.sub,
+          versao: { increment: 1 },
+        },
+      });
+      if (count === 0) {
+        throw conflito(
+          null,
+          "Este relatório foi alterado noutra janela. As linhas foram atualizadas — reveja e finalize de novo.",
+        );
+      }
+
+      // Read after the update holds the row lock, so these are exactly the
+      // lines that were finalized.
+      const linhas = await tx.linhaRelatorio.findMany({ where: { relatorioId: id }, select: SELECT_LINHA });
+      const totais = calcularTotais(linhas.map(vistaLinha));
+
+      await tx.relatorioHistorico.create({
+        data: {
+          relatorioId: id,
+          acao: "FINALIZADO",
+          depois: {
+            linhas: linhas.length,
+            vendas: totais.vendas,
+            despesas: totais.despesas,
+            saldo: totais.saldo,
+          },
+          userId: session.sub,
+          userName: session.name,
+        },
+      });
+
+      return { dia: dateParaDia(relatorio.dia), linhas: linhas.length, saldo: totais.saldo };
+    });
+  } catch (error) {
+    if (error instanceof Recusa) return error.resultado;
+    logger.error("relatorio_finalizar_falhou", {
+      relatorioId: id,
+      by: session.email,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return { ...FALHA_GENERICA, message: "Não foi possível finalizar. Tente de novo." };
+  }
+
+  await recordAudit(session, {
+    action: "relatorio.finalizado",
+    entity: "RelatorioDiario",
+    entityId: id,
+    summary: `Finalizou o relatório de ${rotuloDiaCurto(resumo.dia)} (${resumo.linhas} linha(s), saldo ${formatCentimos(resumo.saldo)})`,
+  });
+
+  revalidarRelatorio(id);
+  return { ok: true };
+}
+
+/**
+ * The report's current version, for a tab coming back into focus to tell
+ * whether another tab has changed it meanwhile.
+ */
+export async function consultarVersaoRelatorio(
+  id: string,
+): Promise<{ versao: number; estado: "RASCUNHO" | "FINALIZADO" } | null> {
+  const session = await requireSession("/equipa/entrar");
+  const [relatorio, acesso] = await Promise.all([
+    prisma.relatorioDiario.findUnique({
+      where: { id },
+      select: { userId: true, versao: true, estado: true },
+    }),
+    acessoRelatorios(session),
+  ]);
+  if (!relatorio || !podeVerRelatorio(session, acesso, relatorio.userId)) return null;
+  return { versao: relatorio.versao, estado: relatorio.estado };
+}
+
+// ---------- Administrador ----------
+
+/**
+ * Sends a finalized report back to draft so its author can correct it.
+ *
+ * Admin only, and a reason is required: the reopen is recorded in the report's
+ * own history next to the edits that follow it, and in the audit trail.
+ */
+export async function reabrirRelatorio(_prev: FormState, formData: FormData): Promise<FormState> {
+  const admin = await assertAdminRole();
+
+  const result = reabrirRelatorioSchema.safeParse(Object.fromEntries(formData));
+  if (!result.success) return validationError(result.error);
+  const { id, motivo } = result.data;
+
+  const relatorio = await prisma.relatorioDiario.findUnique({
+    where: { id },
+    select: { estado: true, dia: true, user: { select: { name: true } } },
+  });
+  if (!relatorio) return { ok: false, message: "Relatório não encontrado." };
+
+  const reaberto = await prisma.$transaction(async (tx) => {
+    const { count } = await tx.relatorioDiario.updateMany({
+      where: { id, estado: "FINALIZADO" },
+      data: {
+        estado: "RASCUNHO",
+        finalizadoEm: null,
+        finalizadoPorId: null,
+        versao: { increment: 1 },
+      },
+    });
+    if (count === 0) return false;
+    await tx.relatorioHistorico.create({
+      data: {
+        relatorioId: id,
+        acao: "REABERTO",
+        nota: motivo,
+        userId: admin.sub,
+        userName: admin.name,
+      },
+    });
+    return true;
+  });
+  if (!reaberto) return { ok: false, message: "O relatório já está em rascunho." };
+
+  await recordAudit(admin, {
+    action: "relatorio.reaberto",
+    entity: "RelatorioDiario",
+    entityId: id,
+    summary: `Reabriu o relatório de ${relatorio.user.name} de ${rotuloDiaCurto(dateParaDia(relatorio.dia))}`,
+    meta: { motivo },
+  });
+
+  revalidarRelatorio(id);
+  // Redirect rather than return: the reopen form only exists on a finalized
+  // report, so a returned message would unmount along with it.
+  redirect(`/admin/relatorios/${id}?reaberto=1`);
+}
+
+function revalidarRelatorio(id: string): void {
+  revalidatePath("/equipa/relatorios");
+  revalidatePath(`/equipa/relatorios/${id}`);
+  revalidatePath("/admin/relatorios");
+  revalidatePath(`/admin/relatorios/${id}`);
+}
+
+// ---------- Administrador: payment methods ----------
+
+function revalidarMetodos(): void {
+  revalidatePath("/admin/relatorios/metodos");
+  revalidatePath("/equipa/relatorios", "layout");
+}
+
+async function nomeEmUso(nome: string, excetoId?: string): Promise<boolean> {
+  const existente = await prisma.metodoPagamento.findFirst({
+    where: {
+      nome: { equals: nome, mode: "insensitive" },
+      ...(excetoId ? { id: { not: excetoId } } : {}),
+    },
+    select: { id: true },
+  });
+  return Boolean(existente);
+}
+
+/**
+ * Creates or renames a payment method.
+ *
+ * A rename does not rewrite past lines: each line keeps the name the method had
+ * when it was saved, so a finalized report still reads as it did.
+ */
+export async function guardarMetodoPagamento(
+  _prev: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const admin = await assertAdminRole();
+
+  const result = metodoPagamentoSchema.safeParse(Object.fromEntries(formData));
+  if (!result.success) return validationError(result.error);
+  const { id, nome } = result.data;
+
+  if (await nomeEmUso(nome, id || undefined)) {
+    const message = `Já existe um método de pagamento chamado "${nome}".`;
+    return { ok: false, message, errors: { nome: [message] } };
+  }
+
+  if (id) {
+    const anterior = await prisma.metodoPagamento.findUnique({
+      where: { id },
+      select: { nome: true },
+    });
+    if (!anterior) return { ok: false, message: "Método de pagamento não encontrado." };
+
+    await prisma.metodoPagamento.update({ where: { id }, data: { nome } });
+    await recordAudit(admin, {
+      action: "metodo_pagamento.atualizado",
+      entity: "MetodoPagamento",
+      entityId: id,
+      summary: `Atualizou o método de pagamento "${anterior.nome}" → "${nome}"`,
+    });
+    revalidarMetodos();
+    return { ok: true, message: `Método "${nome}" atualizado.` };
+  }
+
+  const ordem = await prisma.metodoPagamento.aggregate({ _max: { sortOrder: true } });
+  const criado = await prisma.metodoPagamento.create({
+    data: { nome, sortOrder: (ordem._max.sortOrder ?? -1) + 1 },
+  });
+  await recordAudit(admin, {
+    action: "metodo_pagamento.criado",
+    entity: "MetodoPagamento",
+    entityId: criado.id,
+    summary: `Criou o método de pagamento "${nome}"`,
+  });
+  revalidarMetodos();
+  return { ok: true, message: `Método "${nome}" criado.` };
+}
+
+/**
+ * Retires or restores a payment method. Retiring only removes it from the
+ * picker: lines that used it keep pointing at it and keep its name.
+ */
+export async function alternarMetodoPagamento(formData: FormData): Promise<void> {
+  const admin = await assertAdminRole();
+
+  const result = alternarMetodoPagamentoSchema.safeParse(Object.fromEntries(formData));
+  if (!result.success) return;
+  const { id, ativo } = result.data;
+
+  const metodo = await prisma.metodoPagamento.findUnique({
+    where: { id },
+    select: { nome: true },
+  });
+  if (!metodo) return;
+
+  await prisma.metodoPagamento.update({ where: { id }, data: { ativo } });
+  await recordAudit(admin, {
+    action: ativo ? "metodo_pagamento.reativado" : "metodo_pagamento.desativado",
+    entity: "MetodoPagamento",
+    entityId: id,
+    summary: `${ativo ? "Reativou" : "Desativou"} o método de pagamento "${metodo.nome}"`,
+  });
+  revalidarMetodos();
+}
+
+// ---------- Administrador: who may use the reports ----------
+
+export type ResultadoAcesso = { ok: true } | { ok: false; message: string };
+
+/**
+ * Grants or removes one person's access. Both flags are sent together so the
+ * row on screen and the row in the database can never drift apart one toggle
+ * at a time.
+ */
+export async function alterarAcessoRelatorios(
+  input: z.input<typeof acessoRelatoriosSchema>,
+): Promise<ResultadoAcesso> {
+  const admin = await assertAdminRole();
+
+  const result = acessoRelatoriosSchema.safeParse(input);
+  if (!result.success) return { ok: false, message: "Pedido inválido." };
+  const { userId, registar, ver } = result.data;
+
+  const alvo = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { name: true, role: true, podeRegistarRelatorios: true, podeVerRelatorios: true },
+  });
+  if (!alvo) return { ok: false, message: "Utilizador não encontrado." };
+  if (alvo.role === "ADMIN") {
+    return { ok: false, message: "Os administradores têm sempre acesso total." };
+  }
+  if (alvo.podeRegistarRelatorios === registar && alvo.podeVerRelatorios === ver) {
+    return { ok: true };
+  }
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: { podeRegistarRelatorios: registar, podeVerRelatorios: ver },
+  });
+
+  const sim = (valor: boolean) => (valor ? "sim" : "não");
+  await recordAudit(admin, {
+    action: "relatorio.acesso_alterado",
+    entity: "User",
+    entityId: userId,
+    summary: `Acesso aos relatórios de ${alvo.name}: registar ${sim(registar)}, ver todos ${sim(ver)}`,
+    meta: {
+      antes: { registar: alvo.podeRegistarRelatorios, ver: alvo.podeVerRelatorios },
+      depois: { registar, ver },
+    },
+  });
+
+  revalidatePath("/admin/relatorios/acessos");
+  return { ok: true };
+}

@@ -636,3 +636,64 @@ export const alternarAtivoSchema = z.object({
   tipo: z.enum(["cargo", "departamento", "categoria"]),
   ativo: z.stringbool(),
 });
+
+// ---------- Relatórios diários de vendas e despesas ----------
+
+export const metodoPagamentoSchema = z.object({
+  id: z.string().optional().or(z.literal("")),
+  nome: nomeCurto("O nome do método de pagamento", 60),
+});
+
+export const alternarMetodoPagamentoSchema = z.object({
+  id: z.string().min(1),
+  ativo: z.stringbool(),
+});
+
+export const abrirRelatorioSchema = z.object({
+  dia: diaSchema,
+});
+
+/**
+ * One autosaved line. The amount arrives as the text the colaborador typed and
+ * is parsed to cêntimos on the server with the same function the editor uses.
+ * `versao` is null for a line the client has never seen saved.
+ */
+export const linhaRelatorioSchema = z.object({
+  relatorioId: z.string().min(1),
+  id: z.string().trim().min(8).max(64).regex(/^[A-Za-z0-9_-]+$/, "Identificador inválido"),
+  versao: z.number().int().positive().nullable(),
+  tipo: z.enum(["VENDA", "DESPESA"], { error: "Escolha venda ou despesa" }),
+  descricao: z
+    .string()
+    .trim()
+    .min(2, "Descreva a linha (mín. 2 caracteres)")
+    .max(200, "Descrição demasiado longa (máx. 200 caracteres)"),
+  valor: z.string().trim().min(1, "Indique o valor"),
+  metodoPagamentoId: z.string().min(1, "Escolha o método de pagamento"),
+});
+
+export const apagarLinhaSchema = z.object({
+  relatorioId: z.string().min(1),
+  id: z.string().min(1),
+  versao: z.number().int().positive(),
+});
+
+export const finalizarRelatorioSchema = z.object({
+  id: z.string().min(1),
+  versao: z.number().int().positive(),
+});
+
+export const acessoRelatoriosSchema = z.object({
+  userId: z.string().min(1),
+  registar: z.boolean(),
+  ver: z.boolean(),
+});
+
+export const reabrirRelatorioSchema = z.object({
+  id: z.string().min(1),
+  motivo: z
+    .string()
+    .trim()
+    .min(5, "Explique porque está a reabrir (mín. 5 caracteres)")
+    .max(500, "Motivo demasiado longo (máx. 500 caracteres)"),
+});

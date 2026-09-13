@@ -11,6 +11,7 @@ import { IconExternal, IconLogout } from "@/components/admin/icons";
 import { EquipaNav } from "@/components/equipa/EquipaNav";
 import { EquipaTabBar } from "@/components/equipa/EquipaTabBar";
 import { periodoAtual } from "@/lib/award/periodo";
+import { resolverAcesso, temAcesso } from "@/lib/relatorios/acesso";
 
 export const metadata: Metadata = { robots: { index: false } };
 
@@ -45,7 +46,15 @@ export default async function EquipaLayout({ children }: { children: React.React
   // must lose access on the next request rather than at token expiry.
   const user = await prisma.user.findUnique({
     where: { id: cookieSession.sub },
-    select: { id: true, name: true, active: true, role: true, mustChangePassword: true },
+    select: {
+      id: true,
+      name: true,
+      active: true,
+      role: true,
+      mustChangePassword: true,
+      podeRegistarRelatorios: true,
+      podeVerRelatorios: true,
+    },
   });
   if (!user?.active) redirect("/equipa/entrar");
 
@@ -68,6 +77,7 @@ export default async function EquipaLayout({ children }: { children: React.React
     select: { estado: true },
   });
   const podeRegistar = !folha || folha.estado === "ABERTA";
+  const comRelatorios = temAcesso(resolverAcesso(user));
 
   return (
     <div id="admin-shell" className="admin-shell flex min-h-screen flex-col">
@@ -119,7 +129,7 @@ export default async function EquipaLayout({ children }: { children: React.React
         </div>
 
         <div className="mx-auto hidden w-full max-w-5xl px-5 pb-3 md:block md:px-8">
-          <EquipaNav />
+          <EquipaNav comRelatorios={comRelatorios} />
         </div>
       </header>
 
@@ -129,7 +139,7 @@ export default async function EquipaLayout({ children }: { children: React.React
         {children}
       </main>
 
-      <EquipaTabBar podeRegistar={podeRegistar} />
+      <EquipaTabBar podeRegistar={podeRegistar} comRelatorios={comRelatorios} />
     </div>
   );
 }

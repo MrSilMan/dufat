@@ -16,12 +16,16 @@ export type Entrada = {
   isOutro?: boolean;
   /** How many people hold this cargo — a cargo in use cannot be retired. */
   emUso?: number;
+  /** Free-form detail line, for lists the counters above do not describe. */
+  detalhe?: string;
 };
 
 type Accao = (prev: FormState, formData: FormData) => Promise<FormState>;
+type Alternar = (formData: FormData) => Promise<void>;
 
 /**
- * One reference list — cargos, departamentos or activity categories.
+ * One reference list — cargos, departamentos, activity categories or payment
+ * methods.
  *
  * Rows are retired rather than deleted: a cargo that has been used is part of
  * how past periods were scored, and removing it would break the record of who
@@ -38,10 +42,11 @@ export function OrganizacaoSecao({
   placeholder,
   comDiasSemana = false,
   comOutro = false,
+  alternar = alternarAtivo,
 }: {
   titulo: string;
   descricao: string;
-  tipo: "cargo" | "departamento" | "categoria";
+  tipo: "cargo" | "departamento" | "categoria" | "metodo";
   entradas: Entrada[];
   accao: Accao;
   rotuloNome: string;
@@ -50,6 +55,8 @@ export function OrganizacaoSecao({
   placeholder: string;
   comDiasSemana?: boolean;
   comOutro?: boolean;
+  /** Retire/restore action. Payment methods use their own, admin-only one. */
+  alternar?: Alternar;
 }) {
   const [state, action, pending] = useActionState(accao, initialFormState);
   const [aEditar, setAEditar] = useState<string | null>(null);
@@ -86,6 +93,7 @@ export function OrganizacaoSecao({
                   {entrada.emUso !== undefined &&
                     `${entrada.emUso} ${entrada.emUso === 1 ? "pessoa" : "pessoas"}`}
                   {comOutro && entrada.isOutro && 'Conta como "Outro" na penalização'}
+                  {entrada.detalhe}
                 </p>
               </div>
 
@@ -97,7 +105,7 @@ export function OrganizacaoSecao({
                 >
                   {entrada.id === aEditar ? "Fechar" : "Editar"}
                 </button>
-                <form action={alternarAtivo}>
+                <form action={alternar}>
                   <input type="hidden" name="id" value={entrada.id} />
                   <input type="hidden" name="tipo" value={tipo} />
                   <input type="hidden" name="ativo" value={entrada.ativo ? "false" : "true"} />

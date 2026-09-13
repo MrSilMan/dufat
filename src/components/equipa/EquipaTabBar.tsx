@@ -4,19 +4,25 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/cn";
 import { IconPlus } from "@/components/admin/icons";
-import { ABAS, abaAtiva } from "@/components/equipa/EquipaNav";
+import { abaAtiva, abasVisiveis } from "@/components/equipa/EquipaNav";
 
 /**
  * Bottom navigation for the phone.
  *
- * Three destinations plus the one action people come here to do. "Registar" is
- * an action rather than a fourth tab because it is a form you finish and leave,
+ * The destinations plus the one action people come here to do. "Registar" is
+ * an action rather than another tab because it is a form you finish and leave,
  * not a place you stay — it opens as a sheet over whatever you were reading,
  * and closing it puts you back where you were.
  *
  * Hidden from `md:` up, where the header tabs take over.
  */
-export function EquipaTabBar({ podeRegistar }: { podeRegistar: boolean }) {
+export function EquipaTabBar({
+  podeRegistar,
+  comRelatorios,
+}: {
+  podeRegistar: boolean;
+  comRelatorios: boolean;
+}) {
   const pathname = usePathname();
 
   return (
@@ -25,7 +31,7 @@ export function EquipaTabBar({ podeRegistar }: { podeRegistar: boolean }) {
       className="equipa-tabbar admin-chrome fixed inset-x-0 bottom-0 z-40 border-t border-a-line md:hidden"
     >
       <ul className="mx-auto flex max-w-lg items-stretch justify-around px-1 pt-1">
-        {ABAS.map((aba, indice) => {
+        {abasVisiveis(comRelatorios).map((aba, indice) => {
           const ativa = abaAtiva(pathname, aba);
           const item = (
             <li key={aba.href} className="flex-1">

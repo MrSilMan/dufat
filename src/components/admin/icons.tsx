@@ -194,6 +194,18 @@ export function IconTrophy({ className }: IconProps) {
   );
 }
 
+/** Daily sales/expense report */
+export function IconReceipt({ className }: IconProps) {
+  return (
+    <svg {...base(className)}>
+      <path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3z" />
+      <path d="M9 8h6" />
+      <path d="M9 12h6" />
+      <path d="M9 16h3" />
+    </svg>
+  );
+}
+
 /** Downloadable / export */
 export function IconDownload({ className }: IconProps) {
   return (
