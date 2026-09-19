@@ -135,21 +135,28 @@ export function taxaIvaParaTexto(taxaIvaCentesimos: number): string {
 }
 
 /**
- * quantidade × unit price (+ IVA, when the line carries a rate), in cêntimos,
- * rounded half-up to the cêntimo.
+ * quantidade × unit price (+ IVA, when the line carries a rate), in cêntimos.
  *
  * Exact arithmetic throughout: `2,5 × 85 000,00 Kz` is exactly 212 500,00 Kz,
  * not 212 499,999… The product of two in-range values can still leave 2^53, so
  * it is taken as a BigInt; a total that large comes back as an unsafe-looking
  * number that the caller's `MAX_CENTIMOS` check then refuses.
  *
- * The tax is rounded once, on the line's taxable total — which is what INVGEST
- * does, and the reason a record imported from a document adds up to the same
- * cêntimo as the document: 10 × 3 508,77 is 35 087,70 + 4 912,28 = 39 999,98
- * there and here, where a gross unit price would have made it 40 000,00.
+ * The two roundings are not the same, and that is deliberate.
  *
- * Every argument is non-negative — the parsers refuse anything else — which is
- * what makes `+500` a half-up rounding rather than a half-away-from-zero one.
+ * The taxable total rounds half-up, the ordinary arithmetic rounding.
+ *
+ * The tax is rounded **up to the next cêntimo**, once, on the line's taxable
+ * total. That is the AGT rule for `taxContribution` in electronic invoicing —
+ * "o valor calculado neste campo deverá ser arredondado por excesso para o
+ * cêntimo seguinte" (23,144 → 23,15; 0,001844 → 0,01) — and INVGEST follows
+ * it, so it is the only way a record imported from a document lands on the
+ * document's own total: 2 × 17 105,26 is 34 210,52 + 4 789,48 = 39 000,00
+ * there and here, where rounding the tax half-up would have said 38 999,99.
+ *
+ * Every argument is non-negative — the parsers refuse anything else — so the
+ * `+500` is a half-up rounding rather than a half-away-from-zero one, and the
+ * `+9999` a ceiling rather than a floor.
  */
 export function totalDaLinha(
   quantidadeMil: number,
@@ -159,7 +166,7 @@ export function totalDaLinha(
   const produto = BigInt(quantidadeMil) * BigInt(precoUnitarioCentimos);
   const liquido = (produto + 500n) / 1000n;
   const taxa = BigInt(Math.min(Math.max(Math.round(taxaIvaCentesimos), 0), MAX_TAXA_IVA));
-  const centimos = taxa === 0n ? liquido : liquido + (liquido * taxa + 5000n) / 10000n;
+  const centimos = taxa === 0n ? liquido : liquido + (liquido * taxa + 9999n) / 10000n;
   const limite = BigInt(Number.MAX_SAFE_INTEGER);
   return Number(centimos > limite ? limite : centimos);
 }

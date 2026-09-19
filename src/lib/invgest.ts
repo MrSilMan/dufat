@@ -254,11 +254,29 @@ export async function listAllItems(
  * the standard Angolan rate). What goes in the till, on a price tag or on a
  * daily report is the gross price, so prices coming out of the API pass through
  * here rather than being used as they arrive.
+ *
+ * The IVA is rounded **up to the next cêntimo**, the AGT rule for
+ * `taxContribution` in electronic invoicing, so one unit priced here agrees to
+ * the cêntimo with a one-unit line in a report. `totalDaLinha` in
+ * `lib/relatorios/dinheiro.ts` is the same rule for a whole line, and the two
+ * have to move together; this module stays import-free on purpose, being the
+ * bare API client, which is why the rule is spelled out twice.
+ *
+ * The arithmetic is integer throughout — the product of two exact integers,
+ * then a quotient and a remainder — because `Math.ceil` on a float quotient
+ * rounds a whole number of cêntimos up to the next one whenever the division
+ * lands a hair above it.
  */
 export function precoComIva(unitPrice: number, taxRate?: number | null): number {
   if (!Number.isFinite(unitPrice) || unitPrice <= 0) return 0;
   const taxa = typeof taxRate === "number" && Number.isFinite(taxRate) && taxRate > 0 ? taxRate : 0;
-  return Math.round(unitPrice * (100 + taxa)) / 100;
+  const liquidoCentimos = Math.round(unitPrice * 100);
+  if (taxa === 0) return liquidoCentimos / 100;
+
+  const produto = liquidoCentimos * Math.round(taxa * 100);
+  const resto = produto % 10000;
+  const imposto = (produto - resto) / 10000 + (resto === 0 ? 0 : 1);
+  return (liquidoCentimos + imposto) / 100;
 }
 
 /** Map INVGEST error codes to friendly, admin-facing Portuguese messages. */
