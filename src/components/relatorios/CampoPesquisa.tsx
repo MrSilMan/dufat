@@ -9,6 +9,17 @@ import type { ResultadoPesquisa } from "@/lib/relatorios/catalogo";
 const ATRASO = 300;
 /** Below this, a search would match most of the catalog. */
 const MINIMO = 2;
+/** How tall the list may get, and how short it may be squeezed. */
+const ALTURA_MAXIMA = 320;
+const ALTURA_MINIMA = 132;
+/** Breathing room between the list and the edge of the window. */
+const MARGEM = 12;
+/**
+ * On a phone the fixed tab bar sits over the bottom of the window — the
+ * layout reserves 6.5rem plus the home indicator for it, and a list that
+ * ends underneath it hides its own last result.
+ */
+const BARRA_TELEFONE = 112;
 
 export type Sugestao = {
   /** Unique within one result list. */
@@ -75,6 +86,10 @@ export function CampoPesquisa<T>({
   /** The text the open list belongs to; a new keystroke invalidates it. */
   const [termoAberto, setTermoAberto] = useState("");
 
+  /** Where the list fits: under the field, or — near the bottom — over it. */
+  const [acima, setAcima] = useState(false);
+  const [altura, setAltura] = useState(ALTURA_MAXIMA);
+
   const sequencia = useRef(0);
   const temporizador = useRef<ReturnType<typeof setTimeout> | null>(null);
   const envolvente = useRef<HTMLDivElement>(null);
@@ -100,6 +115,28 @@ export function CampoPesquisa<T>({
     };
   }, [aberto]);
 
+  /**
+   * Where the list fits. Measured just before it is shown, because the last
+   * article of a long record sits near the bottom of the screen and a list
+   * that only ever drops downwards would open into the fold.
+   */
+  function medirEspaco() {
+    const caixa = envolvente.current?.getBoundingClientRect();
+    if (!caixa) return;
+    // On a phone the fixed tab bar covers the bottom of the window.
+    const rodape = window.innerWidth < 768 ? BARRA_TELEFONE : MARGEM;
+    const abaixo = window.innerHeight - caixa.bottom - rodape;
+    // Upwards, the sticky header is the ceiling: it is painted over the list,
+    // so whatever reaches it is simply gone.
+    const cabecalho = document.querySelector("header.admin-chrome");
+    const teto = (cabecalho?.getBoundingClientRect().bottom ?? 0) + MARGEM;
+    const porCima = caixa.top - teto;
+    // Flip only when going up actually buys room.
+    const cima = abaixo < ALTURA_MINIMA && porCima > abaixo;
+    setAcima(cima);
+    setAltura(Math.max(ALTURA_MINIMA, Math.min(ALTURA_MAXIMA, cima ? porCima : abaixo)));
+  }
+
   function agendarProcura(termo: string) {
     if (temporizador.current) clearTimeout(temporizador.current);
     const limpo = termo.trim();
@@ -123,11 +160,13 @@ export function CampoPesquisa<T>({
       setAviso(resposta.aviso ?? null);
       setTermoAberto(termo);
       setAtivo(resposta.resultados.length > 0 ? 0 : -1);
+      medirEspaco();
       setAberto(true);
     } catch {
       if (meu !== sequencia.current) return;
       setResultados([]);
       setAviso("Não foi possível procurar. Escreva à mão.");
+      medirEspaco();
       setAberto(true);
     } finally {
       if (meu === sequencia.current) setAProcurar(false);
@@ -149,7 +188,10 @@ export function CampoPesquisa<T>({
       return;
     }
     if (!aberto || resultados.length === 0) {
-      if (evento.key === "ArrowDown" && resultados.length > 0) setAberto(true);
+      if (evento.key === "ArrowDown" && resultados.length > 0) {
+        medirEspaco();
+        setAberto(true);
+      }
       return;
     }
     if (evento.key === "ArrowDown") {
@@ -167,6 +209,20 @@ export function CampoPesquisa<T>({
   // The list belongs to the text it was fetched for; showing it against newer
   // text would offer "Luminária ST89" for something already retyped.
   const mostrar = aberto && valor.trim() === termoAberto;
+
+  // Re-measured while the list is open, because on a phone that is what the
+  // keyboard opening looks like: a window half as tall as it was.
+  useEffect(() => {
+    if (!mostrar) return;
+    window.addEventListener("resize", medirEspaco);
+    return () => window.removeEventListener("resize", medirEspaco);
+  }, [mostrar]);
+
+  // Arrowing past the visible end of a long list should follow the selection.
+  useEffect(() => {
+    if (!mostrar || ativo < 0) return;
+    document.getElementById(`${listaId}-${ativo}`)?.scrollIntoView({ block: "nearest" });
+  }, [mostrar, ativo, listaId]);
 
   return (
     <div ref={envolvente} className={cn("relative", className)}>
@@ -188,7 +244,10 @@ export function CampoPesquisa<T>({
           agendarProcura(evento.target.value);
         }}
         onFocus={() => {
-          if (resultados.length > 0 && valor.trim() === termoAberto) setAberto(true);
+          if (resultados.length > 0 && valor.trim() === termoAberto) {
+            medirEspaco();
+            setAberto(true);
+          }
         }}
         onBlur={onBlur}
         onKeyDown={teclado}
@@ -203,9 +262,24 @@ export function CampoPesquisa<T>({
       )}
 
       {mostrar && (
-        <div className="card-admin absolute left-0 right-0 z-40 mt-1.5 overflow-hidden rounded-xl backdrop-blur-xl">
+        <div
+          style={{ maxHeight: altura }}
+          className={cn(
+            // Its own elevation rather than the card's: a popover that floats
+            // over a card needs to look like it is in front of it.
+            // z-20 keeps it under the sticky header (z-30) and the phone's tab
+            // bar (z-40), which are chrome it should slide behind, and over
+            // every field and card around it.
+            "absolute left-0 right-0 z-20 flex flex-col overflow-hidden rounded-xl border border-a-line-strong bg-a-surface-2 shadow-[0_2px_8px_-2px_var(--a-card-shadow),0_24px_48px_-16px_var(--a-card-shadow)] backdrop-blur-xl",
+            acima ? "bottom-full mb-1.5" : "top-full mt-1.5",
+          )}
+        >
           {resultados.length > 0 ? (
-            <ul id={listaId} role="listbox" className="max-h-72 overflow-y-auto py-1">
+            <ul
+              id={listaId}
+              role="listbox"
+              className="min-h-0 flex-1 divide-y divide-a-line/70 overflow-y-auto overscroll-contain"
+            >
               {resultados.map((item, indice) => {
                 const dados = sugestao(item);
                 return (
@@ -220,8 +294,8 @@ export function CampoPesquisa<T>({
                       onClick={() => escolher(item)}
                       onMouseEnter={() => setAtivo(indice)}
                       className={cn(
-                        "flex w-full items-start gap-3 px-3.5 py-2.5 text-left transition-colors",
-                        indice === ativo ? "bg-a-accent/10" : "hover:bg-a-line/40",
+                        "flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition-colors",
+                        indice === ativo ? "bg-a-accent-soft" : "hover:bg-a-hover",
                       )}
                     >
                       <span className="min-w-0 flex-1">
@@ -256,7 +330,9 @@ export function CampoPesquisa<T>({
           )}
 
           {aviso && resultados.length > 0 && (
-            <p className="border-t border-a-line px-3.5 py-2 text-xs text-amber-600">{aviso}</p>
+            <p className="shrink-0 border-t border-a-line px-3.5 py-2 text-xs text-amber-600">
+              {aviso}
+            </p>
           )}
         </div>
       )}

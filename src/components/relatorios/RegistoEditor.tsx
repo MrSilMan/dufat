@@ -151,7 +151,10 @@ export function RegistoEditor({
     <li
       id={`registo-${registo.id}`}
       className={cn(
-        "card-admin overflow-hidden",
+        // No `overflow-hidden`: the search suggestions hang out of the card,
+        // and clipping them cuts the last result in half. Nothing inside
+        // paints to the card's edges, so the rounded corners hold without it.
+        "card-admin",
         estado === "conflito" && "border-amber-500/50",
         estado === "erro" && "border-rose-500/40",
       )}
