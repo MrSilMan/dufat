@@ -8,7 +8,7 @@ import { logger } from "@/lib/logger";
 import { invalidateCache } from "@/lib/redis";
 import { assertAdminRole, requireAdmin, requireAdminRole } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
-import { isInvgestEnabled, invgestErrorMessage, listAllItems } from "@/lib/invgest";
+import { isInvgestEnabled, invgestErrorMessage, listAllItems, precoComIva } from "@/lib/invgest";
 import { SETTINGS_CACHE_KEY, SETTINGS_ID } from "@/lib/settings";
 import {
   caseStudySchema,
@@ -224,7 +224,8 @@ async function uniqueProductSlug(name: string, fallback: string): Promise<string
 
 /**
  * Import the INVGEST catalog into local products. INVGEST is the source of which
- * products exist and their billing data (name + price); the rich showcase fields
+ * products exist and their billing data (name + price, stored with IVA as the
+ * site quotes it); the rich showcase fields
  * (category, images, specs, wattage/lumens, 3D) are enriched locally afterwards.
  *
  * Matched by invgestItemId: an existing link has its name/price refreshed; an
@@ -273,9 +274,11 @@ export async function importProductsFromInvgest(_prev: FormState, formData: Form
         select: { id: true },
       });
 
-      // INVGEST items with a 0 price mean "no price defined" — keep those as
-      // null locally so the site shows "Preço sob consulta" instead of 0,00 Kz.
-      const priceKz = item.unitPrice > 0 ? item.unitPrice : null;
+      // INVGEST prices are net; the site quotes what a customer pays, so the
+      // article's IVA goes on before the price is stored. Items with a 0 price
+      // mean "no price defined" — those stay null locally, so the site shows
+      // "Preço sob consulta" instead of 0,00 Kz.
+      const priceKz = item.unitPrice > 0 ? precoComIva(item.unitPrice, item.taxRate) : null;
 
       if (existing) {
         await prisma.product.update({

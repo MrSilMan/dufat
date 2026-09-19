@@ -3,117 +3,68 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/cn";
-import { AdminField, adminInputClass } from "@/components/admin/ui";
 import { ConfirmDialog } from "@/components/admin/ConfirmDialog";
 import { IconPlus } from "@/components/admin/icons";
-import { ResumoRelatorio } from "@/components/relatorios/ResumoRelatorio";
+import { CartoesTotais, TabelaPorMetodo } from "@/components/relatorios/ResumoRelatorio";
+import { ImportarFactura } from "@/components/relatorios/ImportarFactura";
+import { RegistoEditor, totalDoRegistoEmEdicao } from "@/components/relatorios/RegistoEditor";
 import {
-  apagarLinha,
+  apagarRegisto,
   consultarVersaoRelatorio,
   finalizarRelatorio,
-  guardarLinha,
-  type ResultadoLinha,
+  guardarRegisto,
+  type ResultadoRegisto,
 } from "@/server/actions/relatorios";
-import { centimosParaTexto, formatCentimos, parseValorCentimos } from "@/lib/relatorios/dinheiro";
+import {
+  centimosParaTexto,
+  formatCentimos,
+  parseQuantidadeMil,
+  parseValorCentimos,
+  quantidadeMilParaTexto,
+  totalDaLinha,
+} from "@/lib/relatorios/dinheiro";
 import {
   ROTULO_TIPO,
   calcularTotais,
-  type LinhaVista,
+  type RegistoVista,
   type TipoLinha,
 } from "@/lib/relatorios/resumo";
-
-type Campos = {
-  tipo: TipoLinha;
-  descricao: string;
-  /** Exactly what was typed; parsed to cêntimos on save. */
-  valor: string;
-  metodoPagamentoId: string;
-};
-
-type Estado =
-  | "nova"
-  | "guardada"
-  | "por_guardar"
-  | "a_guardar"
-  | "incompleta"
-  | "erro"
-  | "sem_ligacao"
-  | "conflito";
-
-type Linha = {
-  id: string;
-  /** The last copy the server confirmed; null until the first save lands. */
-  base: LinhaVista | null;
-  campos: Campos;
-  estado: Estado;
-  mensagem?: string;
-  errors?: Record<string, string[]>;
-  /** In the "conflito" state: the row as the server has it, or null if deleted. */
-  atual?: LinhaVista | null;
-  /** Restored from this device's backup of a previous visit. */
-  recuperada?: boolean;
-};
-
-type Metodo = { id: string; nome: string };
-
-const TIPOS: TipoLinha[] = ["VENDA", "DESPESA"];
+import type { FacturaCarregada } from "@/lib/relatorios/catalogo";
+import {
+  TIPOS,
+  camposDe,
+  completo,
+  iguais,
+  linhaVazia,
+  novoId,
+  paraEnviar,
+  registoVazio,
+  vazio,
+  type CamposLinha,
+  type CamposRegisto,
+  type EstadoRegisto,
+  type Metodo,
+  type Registo,
+} from "@/components/relatorios/tiposEditor";
 
 /** Debounce while typing; a blur or a pick saves at once. */
 const ATRASO_ESCRITA = 800;
 const ATRASO_RELIGAR = 5000;
 
-function camposDe(linha: LinhaVista): Campos {
-  return {
-    tipo: linha.tipo,
-    descricao: linha.descricao,
-    valor: centimosParaTexto(linha.valorCentimos),
-    metodoPagamentoId: linha.metodoPagamentoId,
-  };
-}
-
-function iguais(campos: Campos, base: LinhaVista): boolean {
-  return (
-    campos.tipo === base.tipo &&
-    campos.descricao.trim() === base.descricao &&
-    parseValorCentimos(campos.valor) === base.valorCentimos &&
-    campos.metodoPagamentoId === base.metodoPagamentoId
-  );
-}
-
-function vazia(campos: Campos): boolean {
-  return !campos.descricao.trim() && !campos.valor.trim();
-}
-
-function completa(campos: Campos): boolean {
-  const valor = parseValorCentimos(campos.valor);
-  return (
-    campos.descricao.trim().length >= 2 &&
-    valor !== null &&
-    valor > 0 &&
-    campos.metodoPagamentoId !== ""
-  );
-}
-
-function novoId(): string {
-  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-}
-
 // ---------- Local backup ----------
 //
-// Each line is saved to the server as soon as it is complete, but a line still
-// being typed — or one whose save could not get through — only exists in this
-// tab. Mirroring those to localStorage means a closed browser or a phone that
-// discards the tab loses nothing: the next visit restores them.
+// Each record saves itself to the server as soon as it is complete, but one
+// still being filled in — or one whose save could not get through — only exists
+// in this tab. Mirroring those to localStorage means a closed browser or a
+// phone that discards the tab loses nothing: the next visit restores them.
 //
 // localStorage is shared by every tab, so each entry names the tab that owns
 // it and when that tab last confirmed it. A tab only restores its own entries
 // (after a reload) or ones whose owner has gone quiet — never the half-typed
-// line of a tab that is still open next to it.
+// record of a tab that is still open next to it.
 
 type Pendente = {
-  campos: Campos;
+  campos: CamposRegisto;
   baseVersao: number | null;
   /** The report's version when this was written; a mismatch means it changed since. */
   versaoRelatorio: number;
@@ -121,7 +72,7 @@ type Pendente = {
   visto: number;
 };
 
-const chaveBackup = (relatorioId: string) => `dufat:relatorio:${relatorioId}:pendentes`;
+const chaveBackup = (relatorioId: string) => `dufat:relatorio:${relatorioId}:registos`;
 
 /** An open tab re-confirms its entries this often… */
 const BATIMENTO = 5_000;
@@ -143,6 +94,55 @@ function idDoSeparador(): string {
   }
 }
 
+const eTexto = (valor: unknown): valor is string => typeof valor === "string";
+
+/**
+ * A backup entry is whatever the last visit left in localStorage — possibly
+ * written by an older version of this screen, or by hand. It is only restored
+ * once every field is the shape the editor expects.
+ */
+function validarCampos(valor: unknown): CamposRegisto | null {
+  if (!valor || typeof valor !== "object") return null;
+  const c = valor as Partial<CamposRegisto>;
+  if (
+    !TIPOS.includes(c.tipo as TipoLinha) ||
+    !eTexto(c.clienteNome) ||
+    !eTexto(c.clienteNif) ||
+    !eTexto(c.clienteInvgestId) ||
+    !eTexto(c.facturaInvgestId) ||
+    !eTexto(c.facturaCodigo) ||
+    !eTexto(c.nota) ||
+    !eTexto(c.metodoPagamentoId) ||
+    !Array.isArray(c.linhas) ||
+    c.linhas.length === 0
+  ) {
+    return null;
+  }
+
+  const linhas: CamposLinha[] = [];
+  for (const bruta of c.linhas) {
+    const l = bruta as Partial<CamposLinha> | null;
+    if (
+      !l ||
+      !eTexto(l.id) ||
+      !eTexto(l.descricao) ||
+      !eTexto(l.quantidade) ||
+      !eTexto(l.precoUnitario) ||
+      !eTexto(l.artigoInvgestId) ||
+      !eTexto(l.artigoCodigo)
+    ) {
+      return null;
+    }
+    // A backup written before lines carried an IVA rate has none: those lines
+    // were priced as paid, which is what a rate of 0 means.
+    linhas.push({
+      ...(l as CamposLinha),
+      taxaIva: typeof l.taxaIva === "number" && l.taxaIva > 0 ? Math.round(l.taxaIva) : 0,
+    });
+  }
+  return { ...(c as CamposRegisto), linhas };
+}
+
 function lerPendentes(relatorioId: string): Record<string, Pendente> {
   try {
     const bruto = window.localStorage.getItem(chaveBackup(relatorioId));
@@ -151,20 +151,16 @@ function lerPendentes(relatorioId: string): Record<string, Pendente> {
     const pendentes: Record<string, Pendente> = {};
     for (const [id, entrada] of Object.entries(valor as Record<string, unknown>)) {
       const p = entrada as Partial<Pendente> | null;
-      const c = p?.campos as Partial<Campos> | undefined;
+      const campos = validarCampos(p?.campos);
       if (
         p &&
-        c &&
-        TIPOS.includes(c.tipo as TipoLinha) &&
-        typeof c.descricao === "string" &&
-        typeof c.valor === "string" &&
-        typeof c.metodoPagamentoId === "string" &&
+        campos &&
         (p.baseVersao === null || typeof p.baseVersao === "number") &&
         typeof p.versaoRelatorio === "number" &&
         typeof p.dono === "string" &&
         typeof p.visto === "number"
       ) {
-        pendentes[id] = p as Pendente;
+        pendentes[id] = { ...(p as Pendente), campos };
       }
     }
     return pendentes;
@@ -174,12 +170,12 @@ function lerPendentes(relatorioId: string): Record<string, Pendente> {
 }
 
 /**
- * Replaces this tab's entries with its current unsaved lines, leaving other
+ * Replaces this tab's entries with its current unsaved records, leaving other
  * tabs' entries alone. `libertar` drops entries this tab has just taken over.
  */
 function gravarPendentes(
   relatorioId: string,
-  linhas: readonly Linha[],
+  registos: readonly Registo[],
   dono: string,
   versaoRelatorio: number,
   libertar: readonly string[] = [],
@@ -192,12 +188,12 @@ function gravarPendentes(
         delete mapa[id];
       }
     }
-    for (const linha of linhas) {
-      if (linha.estado === "guardada") continue;
-      if (!linha.base && vazia(linha.campos)) continue;
-      mapa[linha.id] = {
-        campos: linha.campos,
-        baseVersao: linha.base?.versao ?? null,
+    for (const registo of registos) {
+      if (registo.estado === "guardado") continue;
+      if (!registo.base && vazio(registo.campos)) continue;
+      mapa[registo.id] = {
+        campos: registo.campos,
+        baseVersao: registo.base?.versao ?? null,
         versaoRelatorio,
         dono,
         visto: agora,
@@ -213,39 +209,44 @@ function gravarPendentes(
   }
 }
 
-const temPorGuardar = (linhas: readonly Linha[]) =>
-  linhas.some((l) => l.estado !== "guardada" && !(l.base === null && vazia(l.campos)));
+const temPorGuardar = (registos: readonly Registo[]) =>
+  registos.some((r) => r.estado !== "guardado" && !(r.base === null && vazio(r.campos)));
 
 type Props = {
   relatorioId: string;
   versao: number;
-  linhas: LinhaVista[];
-  /** Active methods only; a line on a retired method still shows its name. */
+  registos: RegistoVista[];
+  /** Active methods only; a record on a retired method still shows its name. */
   metodos: Metodo[];
 };
 
 /**
  * The draft report, edited in place.
  *
- * Every line saves itself: shortly after typing stops, on blur, or right after
- * a pick. The server is the record; this component keeps just enough state to
- * say what is saved, to retry what is not, and to surface — rather than
- * overwrite — changes made in another tab.
+ * Every record saves itself: shortly after typing stops, on blur, or right
+ * after a pick. The server is the record; this component keeps just enough
+ * state to say what is saved, to retry what is not, and to surface — rather
+ * than overwrite — changes made in another tab.
  */
-export function EditorRelatorio({ relatorioId, versao, linhas: linhasServidor, metodos }: Props) {
+export function EditorRelatorio({
+  relatorioId,
+  versao,
+  registos: registosServidor,
+  metodos,
+}: Props) {
   const router = useRouter();
 
-  const [linhas, setLinhas] = useState<Linha[]>(() =>
-    linhasServidor.map((linha) => ({
-      id: linha.id,
-      base: linha,
-      campos: camposDe(linha),
-      estado: "guardada",
+  const [registos, setRegistos] = useState<Registo[]>(() =>
+    registosServidor.map((registo) => ({
+      id: registo.id,
+      base: registo,
+      campos: camposDe(registo),
+      estado: "guardado" as const,
     })),
   );
   // Saves resolve long after the render that started them; they read and write
-  // through this ref so they never act on a stale copy of the lines.
-  const linhasRef = useRef(linhas);
+  // through this ref so they never act on a stale copy of the records.
+  const registosRef = useRef(registos);
   const versaoRef = useRef(versao);
   const emVoo = useRef(new Set<string>());
   const repetir = useRef(new Set<string>());
@@ -257,20 +258,26 @@ export function EditorRelatorio({ relatorioId, versao, linhas: linhasServidor, m
 
   const dono = () => (donoRef.current ??= idDoSeparador());
 
+  // Which records are open. A day is a long list of finished records and one
+  // being written: only the one in hand is worth the whole form, so a record
+  // opens when it is created (or when someone asks for it) and closes again
+  // as soon as the next one starts.
+  const [abertos, setAbertos] = useState<ReadonlySet<string>>(() => new Set<string>());
+
   const [fechado, setFechado] = useState<string | null>(null);
   const [aApagar, setAApagar] = useState<string | null>(null);
   const [aFinalizar, setAFinalizar] = useState(false);
   const [finalizando, setFinalizando] = useState(false);
   const [avisoFinalizar, setAvisoFinalizar] = useState<string | null>(null);
 
-  function atualizar(fn: (atuais: Linha[]) => Linha[]) {
-    const proximas = fn(linhasRef.current);
-    linhasRef.current = proximas;
-    setLinhas(proximas);
+  function atualizar(fn: (atuais: Registo[]) => Registo[]) {
+    const proximos = fn(registosRef.current);
+    registosRef.current = proximos;
+    setRegistos(proximos);
   }
 
-  function mudarLinha(id: string, patch: Partial<Linha>) {
-    atualizar((atuais) => atuais.map((l) => (l.id === id ? { ...l, ...patch } : l)));
+  function mudarRegisto(id: string, patch: Partial<Registo>) {
+    atualizar((atuais) => atuais.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   }
 
   function agendar(id: string, atraso: number) {
@@ -286,24 +293,28 @@ export function EditorRelatorio({ relatorioId, versao, linhas: linhasServidor, m
   }
 
   async function guardar(id: string) {
-    const linha = linhasRef.current.find((l) => l.id === id);
-    if (!linha || linha.estado === "conflito") return;
+    const registo = registosRef.current.find((r) => r.id === id);
+    if (!registo || registo.estado === "conflito") return;
 
-    if (linha.base && iguais(linha.campos, linha.base)) {
-      if (linha.estado !== "guardada") {
-        mudarLinha(id, { estado: "guardada", mensagem: undefined, errors: undefined });
+    if (registo.base && iguais(registo.campos, registo.base)) {
+      if (registo.estado !== "guardado") {
+        mudarRegisto(id, {
+          estado: "guardado",
+          mensagem: undefined,
+          errors: undefined,
+        });
       }
       return;
     }
-    if (!linha.base && vazia(linha.campos)) {
-      mudarLinha(id, { estado: "nova" });
+    if (!registo.base && vazio(registo.campos)) {
+      mudarRegisto(id, { estado: "novo" });
       return;
     }
-    if (!completa(linha.campos)) {
-      mudarLinha(id, { estado: "incompleta", mensagem: undefined });
+    if (!completo(registo.campos)) {
+      mudarRegisto(id, { estado: "incompleto", mensagem: undefined });
       return;
     }
-    // One save per line at a time, so versions are always based on the last
+    // One save per record at a time, so versions are always based on the last
     // confirmed copy; an edit made meanwhile goes out when this one returns.
     if (emVoo.current.has(id)) {
       repetir.current.add(id);
@@ -311,33 +322,40 @@ export function EditorRelatorio({ relatorioId, versao, linhas: linhasServidor, m
     }
 
     emVoo.current.add(id);
-    const enviados = linha.campos;
-    mudarLinha(id, { estado: "a_guardar", mensagem: undefined, errors: undefined });
+    const enviados = registo.campos;
+    mudarRegisto(id, {
+      estado: "a_guardar",
+      mensagem: undefined,
+      errors: undefined,
+    });
 
-    let resultado: ResultadoLinha;
+    let resultado: ResultadoRegisto;
     try {
-      resultado = await guardarLinha({
+      resultado = await guardarRegisto({
         relatorioId,
         id,
-        versao: linha.base?.versao ?? null,
-        ...enviados,
+        versao: registo.base?.versao ?? null,
+        ...paraEnviar(enviados),
       });
     } catch {
       emVoo.current.delete(id);
       repetir.current.delete(id);
-      mudarLinha(id, { estado: "sem_ligacao" });
+      mudarRegisto(id, { estado: "sem_ligacao" });
       agendar(id, ATRASO_RELIGAR);
       return;
     }
     emVoo.current.delete(id);
 
-    const atual = linhasRef.current.find((l) => l.id === id);
+    const atual = registosRef.current.find((r) => r.id === id);
     if (!atual) return;
 
     if (resultado.ok) {
       versaoRef.current = Math.max(versaoRef.current, resultado.versaoRelatorio);
       const mudou = atual.campos !== enviados;
-      mudarLinha(id, { base: resultado.linha, estado: mudou ? "por_guardar" : "guardada" });
+      mudarRegisto(id, {
+        base: resultado.registo,
+        estado: mudou ? "por_guardar" : "guardado",
+      });
       if (repetir.current.delete(id) || mudou) agendar(id, 0);
       return;
     }
@@ -345,17 +363,25 @@ export function EditorRelatorio({ relatorioId, versao, linhas: linhasServidor, m
     repetir.current.delete(id);
     switch (resultado.codigo) {
       case "CONFLITO":
-        mudarLinha(id, { estado: "conflito", atual: resultado.atual, mensagem: resultado.message });
+        mudarRegisto(id, {
+          estado: "conflito",
+          atual: resultado.atual,
+          mensagem: resultado.message,
+        });
         break;
       case "VALIDACAO":
-        mudarLinha(id, { estado: "erro", mensagem: resultado.message, errors: resultado.errors });
+        mudarRegisto(id, {
+          estado: "erro",
+          mensagem: resultado.message,
+          errors: resultado.errors,
+        });
         break;
       case "FECHADO":
       case "SEM_ACESSO":
         fecharEditor(resultado.message);
         break;
       default:
-        mudarLinha(id, { estado: "erro", mensagem: resultado.message });
+        mudarRegisto(id, { estado: "erro", mensagem: resultado.message });
     }
   }
 
@@ -376,51 +402,147 @@ export function EditorRelatorio({ relatorioId, versao, linhas: linhasServidor, m
     guardarRef.current = guardar;
   });
 
-  function editar(id: string, patch: Partial<Campos>, atraso = ATRASO_ESCRITA) {
+  /** Clears the errors for the fields this edit touched, and reschedules. */
+  function aplicar(
+    id: string,
+    mudar: (campos: CamposRegisto) => CamposRegisto,
+    chavesLimpas: string[],
+    atraso: number,
+  ) {
     atualizar((atuais) =>
-      atuais.map((l) => {
-        if (l.id !== id) return l;
-        const errors = l.errors ? { ...l.errors } : undefined;
-        if (errors) for (const campo of Object.keys(patch)) delete errors[campo];
-        const estado: Estado =
-          l.estado === "conflito" || l.estado === "a_guardar" ? l.estado : "por_guardar";
-        return { ...l, campos: { ...l.campos, ...patch }, estado, errors };
+      atuais.map((r) => {
+        if (r.id !== id) return r;
+        const errors = r.errors ? { ...r.errors } : undefined;
+        if (errors) for (const chave of chavesLimpas) delete errors[chave];
+        const estado: EstadoRegisto =
+          r.estado === "conflito" || r.estado === "a_guardar" ? r.estado : "por_guardar";
+        return { ...r, campos: mudar(r.campos), estado, errors };
       }),
     );
     agendar(id, atraso);
   }
 
-  function adicionar(tipo: TipoLinha) {
+  function editar(id: string, patch: Partial<CamposRegisto>, atraso = ATRASO_ESCRITA) {
+    aplicar(id, (campos) => ({ ...campos, ...patch }), Object.keys(patch), atraso);
+  }
+
+  function editarLinha(
+    id: string,
+    linhaId: string,
+    patch: Partial<CamposLinha>,
+    atraso = ATRASO_ESCRITA,
+  ) {
+    aplicar(
+      id,
+      (campos) => ({
+        ...campos,
+        linhas: campos.linhas.map((linha) =>
+          linha.id === linhaId ? { ...linha, ...patch } : linha,
+        ),
+      }),
+      Object.keys(patch).map((campo) => `linhas.${linhaId}.${campo}`),
+      atraso,
+    );
+  }
+
+  function adicionarLinha(id: string) {
+    const nova = linhaVazia();
+    aplicar(id, (campos) => ({ ...campos, linhas: [...campos.linhas, nova] }), [], ATRASO_ESCRITA);
+    focar(`descricao-${nova.id}`);
+  }
+
+  function removerLinha(id: string, linhaId: string) {
+    const registo = registosRef.current.find((r) => r.id === id);
+    // A record is at least one article; the card disables the button too.
+    if (!registo || registo.campos.linhas.length <= 1) return;
+    aplicar(
+      id,
+      (campos) => ({
+        ...campos,
+        linhas: campos.linhas.filter((linha) => linha.id !== linhaId),
+      }),
+      [],
+      0,
+    );
+  }
+
+  function focar(id: string) {
+    requestAnimationFrame(() => document.getElementById(id)?.focus());
+  }
+
+  /**
+   * A record whose save was refused stays open: its message and the choice it
+   * asks for are the reason the day cannot be finalized yet.
+   */
+  const porDecidir = (registo: Registo) =>
+    registo.estado === "erro" || registo.estado === "conflito";
+
+  function alternar(id: string) {
+    setAbertos((atuais) => {
+      const proximos = new Set(atuais);
+      if (!proximos.delete(id)) proximos.add(id);
+      return proximos;
+    });
+  }
+
+  function acrescentar(campos: CamposRegisto): string {
     const id = novoId();
-    atualizar((atuais) => [
-      ...atuais,
-      {
-        id,
-        base: null,
-        campos: {
-          tipo,
-          descricao: "",
-          valor: "",
-          metodoPagamentoId: metodos.length === 1 ? metodos[0]!.id : "",
-        },
-        estado: "nova",
-      },
-    ]);
-    requestAnimationFrame(() => document.getElementById(`descricao-${id}`)?.focus());
+    atualizar((atuais) => [...atuais, { id, base: null, campos, estado: "novo" }]);
+    // Starting a record closes the ones before it: the new card is then the
+    // first thing under the buttons, with no scrolling to reach it.
+    setAbertos(new Set([id]));
+    return id;
+  }
+
+  function adicionar(tipo: TipoLinha) {
+    const campos = registoVazio(tipo, metodos.length === 1 ? metodos[0]!.id : "");
+    acrescentar(campos);
+    focar(`descricao-${campos.linhas[0]!.id}`);
+  }
+
+  /**
+   * A record filled in from an INVGEST document. Everything it brings is
+   * editable — the picker is a shortcut past the typing, not a lock.
+   */
+  function importarFactura(factura: FacturaCarregada) {
+    const campos: CamposRegisto = {
+      tipo: "VENDA",
+      clienteNome: factura.clienteNome ?? "",
+      clienteNif: factura.clienteNif ?? "",
+      clienteInvgestId: factura.clienteInvgestId ?? "",
+      facturaInvgestId: factura.invgestId,
+      facturaCodigo: factura.codigo,
+      nota: "",
+      metodoPagamentoId: metodos.length === 1 ? metodos[0]!.id : "",
+      linhas: factura.linhas.map((linha) => ({
+        id: novoId(),
+        descricao: linha.descricao,
+        quantidade: quantidadeMilParaTexto(linha.quantidadeMil),
+        precoUnitario: centimosParaTexto(linha.precoUnitarioCentimos),
+        taxaIva: linha.taxaIvaCentesimos,
+        artigoInvgestId: linha.artigoInvgestId ?? "",
+        artigoCodigo: linha.artigoCodigo ?? "",
+      })),
+    };
+    const id = acrescentar(campos);
+    // A document carries no payment method: that is the one thing still to
+    // choose, so the card is brought into view with it focused.
+    focar(campos.metodoPagamentoId ? `registo-${id}` : `metodo-${id}`);
+    if (campos.metodoPagamentoId) agendar(id, 0);
   }
 
   function remover(id: string) {
     const temporizador = temporizadores.current.get(id);
     if (temporizador) clearTimeout(temporizador);
     temporizadores.current.delete(id);
-    atualizar((atuais) => atuais.filter((l) => l.id !== id));
+    atualizar((atuais) => atuais.filter((r) => r.id !== id));
   }
 
   function pedirApagar(id: string) {
-    const linha = linhasRef.current.find((l) => l.id === id);
-    if (!linha) return;
+    const registo = registosRef.current.find((r) => r.id === id);
+    if (!registo) return;
     // Never reached the server: nothing to delete there, nothing to confirm.
-    if (!linha.base && linha.estado !== "conflito") {
+    if (!registo.base && registo.estado !== "conflito") {
       remover(id);
       return;
     }
@@ -430,61 +552,69 @@ export function EditorRelatorio({ relatorioId, versao, linhas: linhasServidor, m
   async function confirmarApagar() {
     const id = aApagar;
     setAApagar(null);
-    const linha = linhasRef.current.find((l) => l.id === id);
-    if (!id || !linha) return;
-    if (!linha.base) {
+    const registo = registosRef.current.find((r) => r.id === id);
+    if (!id || !registo) return;
+    if (!registo.base) {
       remover(id);
       return;
     }
 
     const temporizador = temporizadores.current.get(id);
     if (temporizador) clearTimeout(temporizador);
-    mudarLinha(id, { estado: "a_guardar", mensagem: undefined });
+    mudarRegisto(id, { estado: "a_guardar", mensagem: undefined });
 
     try {
-      const resultado = await apagarLinha({ relatorioId, id, versao: linha.base.versao });
+      const resultado = await apagarRegisto({
+        relatorioId,
+        id,
+        versao: registo.base.versao,
+      });
       if (resultado.ok) {
         versaoRef.current = Math.max(versaoRef.current, resultado.versaoRelatorio);
         remover(id);
       } else if (resultado.codigo === "CONFLITO") {
-        mudarLinha(id, { estado: "conflito", atual: resultado.atual, mensagem: resultado.message });
+        mudarRegisto(id, {
+          estado: "conflito",
+          atual: resultado.atual,
+          mensagem: resultado.message,
+        });
       } else if (resultado.codigo === "FECHADO" || resultado.codigo === "SEM_ACESSO") {
         fecharEditor(resultado.message);
       } else {
-        mudarLinha(id, { estado: "erro", mensagem: resultado.message });
+        mudarRegisto(id, { estado: "erro", mensagem: resultado.message });
       }
     } catch {
-      mudarLinha(id, {
+      mudarRegisto(id, {
         estado: "erro",
-        mensagem: "Sem ligação — a linha não foi apagada. Tente de novo.",
+        mensagem: "Sem ligação — o registo não foi apagado. Tente de novo.",
       });
     }
   }
 
-  function usarGuardada(id: string) {
-    const linha = linhasRef.current.find((l) => l.id === id);
-    if (!linha) return;
-    if (!linha.atual) {
+  function usarGuardado(id: string) {
+    const registo = registosRef.current.find((r) => r.id === id);
+    if (!registo) return;
+    if (!registo.atual) {
       remover(id);
       return;
     }
-    mudarLinha(id, {
-      base: linha.atual,
-      campos: camposDe(linha.atual),
-      estado: "guardada",
+    mudarRegisto(id, {
+      base: registo.atual,
+      campos: camposDe(registo.atual),
+      estado: "guardado",
       atual: undefined,
       mensagem: undefined,
       errors: undefined,
     });
   }
 
-  function manterMinha(id: string) {
-    const linha = linhasRef.current.find((l) => l.id === id);
-    if (!linha) return;
+  function manterMeu(id: string) {
+    const registo = registosRef.current.find((r) => r.id === id);
+    if (!registo) return;
     // Based on the server's copy now, so the save is an informed overwrite —
-    // or, for a line deleted elsewhere, a deliberate re-creation.
-    mudarLinha(id, {
-      base: linha.atual ?? null,
+    // or, for a record deleted elsewhere, a deliberate re-creation.
+    mudarRegisto(id, {
+      base: registo.atual ?? null,
       estado: "por_guardar",
       atual: undefined,
       mensagem: undefined,
@@ -504,12 +634,12 @@ export function EditorRelatorio({ relatorioId, versao, linhas: linhasServidor, m
     );
     if (candidatos.length === 0) return;
 
-    const doServidor = new Map(linhasServidor.map((l) => [l.id, l]));
+    const doServidor = new Map(registosServidor.map((r) => [r.id, r]));
     const aGuardar: string[] = [];
 
     atualizar((atuais) => {
-      const porId = new Map(atuais.map((l) => [l.id, l]));
-      const extra: Linha[] = [];
+      const porId = new Map(atuais.map((r) => [r.id, r]));
+      const extra: Registo[] = [];
 
       for (const [id, pendente] of candidatos) {
         // Anything changed in the report since this was written — another
@@ -522,7 +652,12 @@ export function EditorRelatorio({ relatorioId, versao, linhas: linhasServidor, m
           if (iguais(pendente.campos, servidor)) continue;
           const local = porId.get(id)!;
           if (!mudou && pendente.baseVersao === servidor.versao) {
-            porId.set(id, { ...local, campos: pendente.campos, estado: "por_guardar", recuperada: true });
+            porId.set(id, {
+              ...local,
+              campos: pendente.campos,
+              estado: "por_guardar",
+              recuperado: true,
+            });
             aGuardar.push(id);
           } else {
             porId.set(id, {
@@ -530,14 +665,20 @@ export function EditorRelatorio({ relatorioId, versao, linhas: linhasServidor, m
               campos: pendente.campos,
               estado: "conflito",
               atual: servidor,
-              recuperada: true,
+              recuperado: true,
               mensagem:
                 "Recuperámos alterações por guardar, mas o relatório foi alterado entretanto.",
             });
           }
-        } else if (!porId.has(id) && !vazia(pendente.campos)) {
+        } else if (!porId.has(id) && !vazio(pendente.campos)) {
           if (!mudou && pendente.baseVersao === null) {
-            extra.push({ id, base: null, campos: pendente.campos, estado: "por_guardar", recuperada: true });
+            extra.push({
+              id,
+              base: null,
+              campos: pendente.campos,
+              estado: "por_guardar",
+              recuperado: true,
+            });
             aGuardar.push(id);
           } else {
             extra.push({
@@ -546,35 +687,37 @@ export function EditorRelatorio({ relatorioId, versao, linhas: linhasServidor, m
               campos: pendente.campos,
               estado: "conflito",
               atual: null,
-              recuperada: true,
+              recuperado: true,
               mensagem:
                 pendente.baseVersao === null
-                  ? "Recuperámos uma linha por guardar, mas o relatório foi alterado entretanto."
-                  : "Recuperámos alterações por guardar de uma linha entretanto apagada.",
+                  ? "Recuperámos um registo por guardar, mas o relatório foi alterado entretanto."
+                  : "Recuperámos alterações por guardar de um registo entretanto apagado.",
             });
           }
         }
       }
 
-      return [...atuais.map((l) => porId.get(l.id)!), ...extra];
+      return [...atuais.map((r) => porId.get(r.id)!), ...extra];
     });
 
     // Take the restored entries over from the tab that left them, so no other
     // tab restores them a second time.
     gravarPendentes(
       relatorioId,
-      linhasRef.current,
+      registosRef.current,
       dono(),
       versaoRef.current,
       candidatos.map(([id]) => id),
     );
     for (const id of aGuardar) agendar(id, 0);
-    // Mount only: this reads the backup once, against the lines first rendered.
+    // Whatever came back from the backup is what this visit has to look at.
+    setAbertos(new Set(registosRef.current.filter((r) => r.recuperado).map((r) => r.id)));
+    // Mount only: this reads the backup once, against the records first rendered.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Fresh server data (after a refresh): take what changed elsewhere, keep what
-  // is being edited here, and flag the lines where both happened.
+  // is being edited here, and flag the records where both happened.
   const primeira = useRef(true);
   useEffect(() => {
     if (primeira.current) {
@@ -586,21 +729,26 @@ export function EditorRelatorio({ relatorioId, versao, linhas: linhasServidor, m
     if (versao < versaoRef.current) return;
     versaoRef.current = versao;
 
-    const doServidor = new Map(linhasServidor.map((l) => [l.id, l]));
+    const doServidor = new Map(registosServidor.map((r) => [r.id, r]));
     atualizar((atuais) => {
-      const vistas = new Set<string>();
-      const resultado: Linha[] = [];
+      const vistos = new Set<string>();
+      const resultado: Registo[] = [];
 
       for (const local of atuais) {
-        vistas.add(local.id);
+        vistos.add(local.id);
         const servidor = doServidor.get(local.id);
-        const ocupada = emVoo.current.has(local.id);
+        const ocupado = emVoo.current.has(local.id);
 
         if (servidor) {
-          if ((local.base && local.base.versao >= servidor.versao) || ocupada) {
+          if ((local.base && local.base.versao >= servidor.versao) || ocupado) {
             resultado.push(local);
-          } else if (local.estado === "guardada") {
-            resultado.push({ id: local.id, base: servidor, campos: camposDe(servidor), estado: "guardada" });
+          } else if (local.estado === "guardado") {
+            resultado.push({
+              id: local.id,
+              base: servidor,
+              campos: camposDe(servidor),
+              estado: "guardado",
+            });
           } else if (!local.base) {
             resultado.push(local);
           } else {
@@ -608,48 +756,48 @@ export function EditorRelatorio({ relatorioId, versao, linhas: linhasServidor, m
               ...local,
               estado: "conflito",
               atual: servidor,
-              mensagem: "Esta linha foi alterada noutra janela.",
+              mensagem: "Este registo foi alterado noutra janela.",
             });
           }
-        } else if (!local.base || ocupada) {
+        } else if (!local.base || ocupado) {
           resultado.push(local);
-        } else if (local.estado !== "guardada") {
+        } else if (local.estado !== "guardado") {
           resultado.push({
             ...local,
             estado: "conflito",
             atual: null,
-            mensagem: "Esta linha foi apagada noutra janela.",
+            mensagem: "Este registo foi apagado noutra janela.",
           });
         }
-        // A clean line missing from the server was deleted elsewhere: dropped.
+        // A clean record missing from the server was deleted elsewhere: dropped.
       }
 
-      for (const servidor of linhasServidor) {
-        if (!vistas.has(servidor.id)) {
+      for (const servidor of registosServidor) {
+        if (!vistos.has(servidor.id)) {
           resultado.push({
             id: servidor.id,
             base: servidor,
             campos: camposDe(servidor),
-            estado: "guardada",
+            estado: "guardado",
           });
         }
       }
       return resultado;
     });
-  }, [linhasServidor, versao]);
+  }, [registosServidor, versao]);
 
   useEffect(() => {
     const gravar = () => {
       if (!descartarBackup.current) {
-        gravarPendentes(relatorioId, linhasRef.current, dono(), versaoRef.current);
+        gravarPendentes(relatorioId, registosRef.current, dono(), versaoRef.current);
       }
     };
     gravar();
-    if (!temPorGuardar(linhas)) return;
+    if (!temPorGuardar(registos)) return;
     // Keeps this tab's entries fresh so other tabs leave them alone.
     const batimento = setInterval(gravar, BATIMENTO);
     return () => clearInterval(batimento);
-  }, [relatorioId, linhas]);
+  }, [relatorioId, registos]);
 
   // Coming back to this tab: if another tab (or device) changed the report,
   // pull the fresh copy instead of carrying on from a stale one.
@@ -672,8 +820,8 @@ export function EditorRelatorio({ relatorioId, versao, linhas: linhasServidor, m
       }
     };
     const religado = () => {
-      for (const linha of linhasRef.current) {
-        if (linha.estado === "sem_ligacao") agendar(linha.id, 0);
+      for (const registo of registosRef.current) {
+        if (registo.estado === "sem_ligacao") agendar(registo.id, 0);
       }
       void verificar();
     };
@@ -690,8 +838,8 @@ export function EditorRelatorio({ relatorioId, versao, linhas: linhasServidor, m
 
   useEffect(() => {
     const avisar = (event: BeforeUnloadEvent) => {
-      const porGuardar = linhasRef.current.some((l) =>
-        ["por_guardar", "a_guardar", "sem_ligacao"].includes(l.estado),
+      const porGuardar = registosRef.current.some((r) =>
+        ["por_guardar", "a_guardar", "sem_ligacao"].includes(r.estado),
       );
       if (porGuardar) event.preventDefault();
     };
@@ -708,7 +856,10 @@ export function EditorRelatorio({ relatorioId, versao, linhas: linhasServidor, m
     setFinalizando(true);
     setAvisoFinalizar(null);
     try {
-      const resultado = await finalizarRelatorio({ id: relatorioId, versao: versaoRef.current });
+      const resultado = await finalizarRelatorio({
+        id: relatorioId,
+        versao: versaoRef.current,
+      });
       if (resultado.ok) {
         // Closed for everyone: no tab's leftovers apply to it any more.
         descartarBackup.current = true;
@@ -723,8 +874,7 @@ export function EditorRelatorio({ relatorioId, versao, linhas: linhasServidor, m
       setAvisoFinalizar(resultado.message);
       if (resultado.codigo === "FECHADO" || resultado.codigo === "SEM_ACESSO") {
         fecharEditor(resultado.message);
-      }
-      else if (resultado.codigo === "CONFLITO") router.refresh();
+      } else if (resultado.codigo === "CONFLITO") router.refresh();
     } catch {
       setAvisoFinalizar("Sem ligação — o relatório não foi finalizado. Tente de novo.");
     }
@@ -735,33 +885,55 @@ export function EditorRelatorio({ relatorioId, versao, linhas: linhasServidor, m
 
   const nomes = new Map(metodos.map((m) => [m.id, m.nome]));
 
+  // Live totals, including records still being typed: the same sums the server
+  // will arrive at, computed from the same parsers.
   const totais = calcularTotais(
-    linhas.flatMap((l) => {
-      const valor = parseValorCentimos(l.campos.valor);
-      if (valor === null || valor <= 0 || !l.campos.metodoPagamentoId) return [];
+    registos.flatMap((registo) => {
+      if (!registo.campos.metodoPagamentoId) return [];
       const metodoPagamentoNome =
-        l.base && l.base.metodoPagamentoId === l.campos.metodoPagamentoId
-          ? l.base.metodoPagamentoNome
-          : (nomes.get(l.campos.metodoPagamentoId) ?? "—");
-      return [{ tipo: l.campos.tipo, valorCentimos: valor, metodoPagamentoNome }];
+        registo.base && registo.base.metodoPagamentoId === registo.campos.metodoPagamentoId
+          ? registo.base.metodoPagamentoNome
+          : (nomes.get(registo.campos.metodoPagamentoId) ?? "—");
+
+      return registo.campos.linhas.flatMap((linha) => {
+        const quantidade = parseQuantidadeMil(linha.quantidade);
+        const preco = parseValorCentimos(linha.precoUnitario);
+        if (quantidade === null || preco === null || preco <= 0) return [];
+        const valorCentimos = totalDaLinha(quantidade, preco, linha.taxaIva);
+        if (valorCentimos <= 0) return [];
+        return [{ tipo: registo.campos.tipo, valorCentimos, metodoPagamentoNome }];
+      });
     }),
   );
 
-  const porResolver = linhas.filter((l) => l.estado !== "guardada" && l.estado !== "nova");
-  const aGuardar = linhas.some((l) => l.estado === "a_guardar" || l.estado === "por_guardar");
-  const semLigacao = linhas.some((l) => l.estado === "sem_ligacao");
+  const porResolver = registos.filter((r) => r.estado !== "guardado" && r.estado !== "novo");
+  const aGuardar = registos.some((r) => r.estado === "a_guardar" || r.estado === "por_guardar");
+  const semLigacao = registos.some((r) => r.estado === "sem_ligacao");
   const podeFinalizar = !fechado && !finalizando && porResolver.length === 0;
+  const semMetodos = metodos.length === 0;
 
   const estadoGeral = semLigacao
-    ? { texto: "Sem ligação — as alterações ficam neste dispositivo e são enviadas ao religar.", cor: "text-amber-600" }
+    ? {
+        texto: "Sem ligação — as alterações ficam neste dispositivo e são enviadas ao religar.",
+        cor: "text-amber-600",
+      }
     : aGuardar
       ? { texto: "A guardar…", cor: "text-a-muted" }
       : porResolver.length > 0
-        ? { texto: `${porResolver.length} linha(s) por resolver.`, cor: "text-amber-600" }
+        ? {
+            texto: `${porResolver.length} registo(s) por resolver.`,
+            cor: "text-amber-600",
+          }
         : { texto: "Todas as alterações guardadas.", cor: "text-emerald-600" };
 
-  const linhaAApagar = linhas.find((l) => l.id === aApagar);
-  const recuperadas = linhas.filter((l) => l.recuperada).length;
+  const registoAApagar = registos.find((r) => r.id === aApagar);
+  const recuperados = registos.filter((r) => r.recuperado).length;
+
+  // Newest first: the record just started sits right under the buttons that
+  // started it, and the day's older ones fall away below. The number stays the
+  // one the record was created with.
+  const emOrdem = registos.map((registo, indice) => ({ registo, numero: indice + 1 })).reverse();
+  const algumAberto = registos.some((r) => abertos.has(r.id));
 
   return (
     <div className="space-y-6">
@@ -771,30 +943,42 @@ export function EditorRelatorio({ relatorioId, versao, linhas: linhasServidor, m
         </p>
       )}
 
-      {recuperadas > 0 && (
+      {recuperados > 0 && (
         <p role="status" className="card-admin border-lumen/40 p-4 text-sm text-a-text">
-          Recuperámos {recuperadas} linha(s) que ficaram por guardar na última visita.
+          Recuperámos {recuperados} registo(s) que ficaram por guardar na última visita.
         </p>
       )}
 
-      {metodos.length === 0 && (
+      {semMetodos && (
         <p className="card-admin border-lumen/40 p-4 text-sm text-a-text">
           Ainda não há métodos de pagamento disponíveis. Peça ao administrador para os criar antes
           de registar vendas ou despesas.
         </p>
       )}
 
+      {/* The day's figures first, then the buttons that change them, then the
+          records themselves — so adding the next one is always the top of the
+          page, not the end of a list that grows all day. */}
+      <CartoesTotais
+        totais={totais}
+        nota={porResolver.length > 0 ? "Os totais incluem registos ainda por guardar." : undefined}
+      />
+
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p role="status" aria-live="polite" className={cn("text-sm", estadoGeral.cor)}>
           {estadoGeral.texto}
         </p>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <ImportarFactura
+            disabled={semMetodos || Boolean(fechado)}
+            onImportada={importarFactura}
+          />
           {TIPOS.map((tipo) => (
             <button
               key={tipo}
               type="button"
               onClick={() => adicionar(tipo)}
-              disabled={metodos.length === 0 || Boolean(fechado)}
+              disabled={semMetodos || Boolean(fechado)}
               className={cn(tipo === "VENDA" ? "btn-admin" : "btn-admin-ghost", "min-h-11")}
             >
               <IconPlus className="h-4 w-4" />
@@ -804,40 +988,69 @@ export function EditorRelatorio({ relatorioId, versao, linhas: linhasServidor, m
         </div>
       </div>
 
-      {linhas.length === 0 ? (
+      {registos.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-a-line-strong p-10 text-center">
-          <p className="font-semibold text-a-text">Ainda sem linhas.</p>
+          <p className="font-semibold text-a-text">Ainda sem registos.</p>
           <p className="mt-1 text-sm text-a-muted">
-            Adicione as vendas e despesas do dia. Cada linha é guardada automaticamente.
+            Cada venda ou despesa é um registo: o cliente, o pagamento e os artigos que o compõem.
+            Tudo é guardado automaticamente.
           </p>
         </div>
       ) : (
-        <ul className="space-y-3">
-          {linhas.map((linha) => (
-            <LinhaEditor
-              key={linha.id}
-              linha={linha}
-              metodos={metodos}
-              nomes={nomes}
-              bloqueada={Boolean(fechado)}
-              onEditar={(patch, atraso) => editar(linha.id, patch, atraso)}
-              onBlur={() => agendar(linha.id, 0)}
-              onApagar={() => pedirApagar(linha.id)}
-              onTentar={() => {
-                mudarLinha(linha.id, { estado: "por_guardar", mensagem: undefined });
-                agendar(linha.id, 0);
-              }}
-              onUsarGuardada={() => usarGuardada(linha.id)}
-              onManterMinha={() => manterMinha(linha.id)}
-            />
-          ))}
-        </ul>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-3 px-1">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-a-faint">
+              {registos.length} registo(s) · mais recentes primeiro
+            </h2>
+            {registos.length > 1 && (
+              <button
+                type="button"
+                onClick={() =>
+                  setAbertos(algumAberto ? new Set() : new Set(registos.map((r) => r.id)))
+                }
+                className="min-h-9 text-xs font-medium text-a-muted underline-offset-2 transition-colors hover:text-a-text hover:underline"
+              >
+                {algumAberto ? "Fechar todos" : "Abrir todos"}
+              </button>
+            )}
+          </div>
+
+          <ul className="space-y-3">
+            {emOrdem.map(({ registo, numero }) => (
+              <RegistoEditor
+                key={registo.id}
+                registo={registo}
+                numero={numero}
+                metodos={metodos}
+                nomes={nomes}
+                bloqueado={Boolean(fechado)}
+                aberto={abertos.has(registo.id) || porDecidir(registo)}
+                fixo={porDecidir(registo)}
+                onAlternar={() => alternar(registo.id)}
+                onEditar={(patch, atraso) => editar(registo.id, patch, atraso)}
+                onEditarLinha={(linhaId, patch, atraso) =>
+                  editarLinha(registo.id, linhaId, patch, atraso)
+                }
+                onAdicionarLinha={() => adicionarLinha(registo.id)}
+                onRemoverLinha={(linhaId) => removerLinha(registo.id, linhaId)}
+                onBlur={() => agendar(registo.id, 0)}
+                onApagar={() => pedirApagar(registo.id)}
+                onTentar={() => {
+                  mudarRegisto(registo.id, {
+                    estado: "por_guardar",
+                    mensagem: undefined,
+                  });
+                  agendar(registo.id, 0);
+                }}
+                onUsarGuardado={() => usarGuardado(registo.id)}
+                onManterMeu={() => manterMeu(registo.id)}
+              />
+            ))}
+          </ul>
+        </div>
       )}
 
-      <ResumoRelatorio
-        totais={totais}
-        nota={porResolver.length > 0 ? "Os totais incluem linhas ainda por guardar." : undefined}
-      />
+      <TabelaPorMetodo totais={totais} />
 
       <div className="card-admin flex flex-wrap items-center justify-between gap-3 p-4">
         <p className="min-w-0 text-sm text-a-muted">
@@ -846,7 +1059,7 @@ export function EditorRelatorio({ relatorioId, versao, linhas: linhasServidor, m
               {avisoFinalizar}
             </span>
           ) : porResolver.length > 0 ? (
-            "Guarde ou resolva todas as linhas antes de finalizar."
+            "Guarde ou resolva todos os registos antes de finalizar."
           ) : (
             "Quando terminar o dia, finalize o relatório. Depois disso já não o pode alterar."
           )}
@@ -872,207 +1085,15 @@ export function EditorRelatorio({ relatorioId, versao, linhas: linhasServidor, m
 
       <ConfirmDialog
         open={Boolean(aApagar)}
-        confirmLabel="Apagar linha"
-        message={`Apagar ${linhaAApagar ? `"${linhaAApagar.campos.descricao || ROTULO_TIPO[linhaAApagar.campos.tipo]}"` : "esta linha"}?\n\nFica registado no histórico do relatório.`}
+        confirmLabel="Apagar registo"
+        message={
+          registoAApagar
+            ? `Apagar este registo${registoAApagar.campos.clienteNome ? ` de ${registoAApagar.campos.clienteNome}` : ""}?\n\n${registoAApagar.campos.linhas.length} artigo(s) · ${formatCentimos(totalDoRegistoEmEdicao(registoAApagar.campos))}\n\nFica registado no histórico do relatório.`
+            : "Apagar este registo?\n\nFica registado no histórico do relatório."
+        }
         onCancel={() => setAApagar(null)}
         onConfirm={() => void confirmarApagar()}
       />
     </div>
-  );
-}
-
-const ROTULO_ESTADO: Record<Estado, { texto: string; cor: string }> = {
-  nova: { texto: "Nova linha", cor: "text-a-faint" },
-  guardada: { texto: "Guardada", cor: "text-emerald-600" },
-  por_guardar: { texto: "Por guardar…", cor: "text-a-muted" },
-  a_guardar: { texto: "A guardar…", cor: "text-a-muted" },
-  incompleta: { texto: "Incompleta — não guardada", cor: "text-amber-600" },
-  erro: { texto: "Não guardada", cor: "text-rose-500" },
-  sem_ligacao: { texto: "Sem ligação — a tentar de novo", cor: "text-amber-600" },
-  conflito: { texto: "Conflito", cor: "text-amber-600" },
-};
-
-function LinhaEditor({
-  linha,
-  metodos,
-  nomes,
-  bloqueada,
-  onEditar,
-  onBlur,
-  onApagar,
-  onTentar,
-  onUsarGuardada,
-  onManterMinha,
-}: {
-  linha: Linha;
-  metodos: Metodo[];
-  nomes: Map<string, string>;
-  bloqueada: boolean;
-  onEditar: (patch: Partial<Campos>, atraso?: number) => void;
-  onBlur: () => void;
-  onApagar: () => void;
-  onTentar: () => void;
-  onUsarGuardada: () => void;
-  onManterMinha: () => void;
-}) {
-  const { campos, estado } = linha;
-  const rotulo = ROTULO_ESTADO[estado];
-  const metodoRetirado =
-    campos.metodoPagamentoId !== "" && !nomes.has(campos.metodoPagamentoId);
-
-  return (
-    <li
-      id={`linha-${linha.id}`}
-      className={cn(
-        "card-admin p-4",
-        estado === "conflito" && "border-amber-500/50",
-        estado === "erro" && "border-rose-500/40",
-      )}
-    >
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <div
-          role="radiogroup"
-          aria-label="Tipo de linha"
-          className="inline-flex rounded-full border border-a-line p-0.5"
-        >
-          {TIPOS.map((tipo) => {
-            const ativo = campos.tipo === tipo;
-            return (
-              <button
-                key={tipo}
-                type="button"
-                role="radio"
-                aria-checked={ativo}
-                disabled={bloqueada}
-                onClick={() => onEditar({ tipo }, 0)}
-                className={cn(
-                  "min-h-9 rounded-full px-3.5 text-xs font-semibold transition-colors",
-                  ativo
-                    ? tipo === "VENDA"
-                      ? "bg-emerald-500/15 text-emerald-600"
-                      : "bg-rose-500/15 text-rose-500"
-                    : "text-a-muted hover:text-a-text",
-                )}
-              >
-                {ROTULO_TIPO[tipo]}
-              </button>
-            );
-          })}
-        </div>
-
-        <span className={cn("text-xs font-medium", rotulo.cor)}>{rotulo.texto}</span>
-
-        <button
-          type="button"
-          onClick={onApagar}
-          disabled={bloqueada || estado === "a_guardar"}
-          className="btn-row-danger ml-auto min-h-9 px-3 text-xs disabled:opacity-40"
-        >
-          Apagar
-        </button>
-      </div>
-
-      <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_10rem_13rem]">
-        <AdminField
-          label="Descrição"
-          htmlFor={`descricao-${linha.id}`}
-          errors={linha.errors?.descricao}
-        >
-          <input
-            id={`descricao-${linha.id}`}
-            value={campos.descricao}
-            maxLength={200}
-            disabled={bloqueada}
-            autoComplete="off"
-            onChange={(event) => onEditar({ descricao: event.target.value })}
-            onBlur={onBlur}
-            className={adminInputClass}
-            placeholder={
-              campos.tipo === "VENDA" ? "Ex.: 2 luminárias ST89" : "Ex.: combustível da carrinha"
-            }
-          />
-        </AdminField>
-
-        <AdminField label="Valor (Kz)" htmlFor={`valor-${linha.id}`} errors={linha.errors?.valor}>
-          <input
-            id={`valor-${linha.id}`}
-            value={campos.valor}
-            inputMode="decimal"
-            autoComplete="off"
-            disabled={bloqueada}
-            onChange={(event) => onEditar({ valor: event.target.value })}
-            onBlur={onBlur}
-            className={cn(adminInputClass, "text-right font-mono tabular-nums")}
-            placeholder="0,00"
-          />
-        </AdminField>
-
-        <AdminField
-          label="Método de pagamento"
-          htmlFor={`metodo-${linha.id}`}
-          errors={linha.errors?.metodoPagamentoId}
-        >
-          <select
-            id={`metodo-${linha.id}`}
-            value={campos.metodoPagamentoId}
-            disabled={bloqueada}
-            onChange={(event) => onEditar({ metodoPagamentoId: event.target.value }, 0)}
-            className={adminInputClass}
-          >
-            <option value="" disabled>
-              Escolher…
-            </option>
-            {metodos.map((metodo) => (
-              <option key={metodo.id} value={metodo.id}>
-                {metodo.nome}
-              </option>
-            ))}
-            {metodoRetirado && (
-              <option value={campos.metodoPagamentoId}>
-                {linha.base?.metodoPagamentoNome ?? "Método"} (desativado)
-              </option>
-            )}
-          </select>
-        </AdminField>
-      </div>
-
-      {estado === "erro" && linha.mensagem && (
-        <div className="mt-3 flex flex-wrap items-center gap-3">
-          <p role="alert" className="text-sm text-rose-500">
-            {linha.mensagem}
-          </p>
-          {!linha.errors && (
-            <button type="button" onClick={onTentar} className="btn-admin-ghost min-h-9 text-xs">
-              Tentar de novo
-            </button>
-          )}
-        </div>
-      )}
-
-      {estado === "conflito" && (
-        <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3.5 text-sm text-a-text">
-          <p className="font-semibold">{linha.mensagem}</p>
-          {linha.atual && (
-            <p className="mt-1 text-a-muted">
-              Versão guardada: {ROTULO_TIPO[linha.atual.tipo]} · &quot;{linha.atual.descricao}&quot; ·{" "}
-              {formatCentimos(linha.atual.valorCentimos)} · {linha.atual.metodoPagamentoNome}
-            </p>
-          )}
-          <div className="mt-3 flex flex-wrap gap-2">
-            <button type="button" onClick={onUsarGuardada} className="btn-admin-ghost min-h-9 text-xs">
-              {linha.atual ? "Usar a versão guardada" : "Descartar esta linha"}
-            </button>
-            <button
-              type="button"
-              onClick={onManterMinha}
-              disabled={bloqueada}
-              className="btn-admin min-h-9 text-xs"
-            >
-              {linha.atual ? "Manter a minha" : "Guardar de novo"}
-            </button>
-          </div>
-        </div>
-      )}
-    </li>
   );
 }

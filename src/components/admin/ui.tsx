@@ -64,11 +64,21 @@ type AdminFieldProps = {
   children: ReactNode;
   optional?: boolean;
   hint?: string;
+  /** For placing the field in a grid — column spans and the like. */
+  className?: string;
 };
 
-export function AdminField({ label, htmlFor, errors, children, optional, hint }: AdminFieldProps) {
+export function AdminField({
+  label,
+  htmlFor,
+  errors,
+  children,
+  optional,
+  hint,
+  className,
+}: AdminFieldProps) {
   return (
-    <div>
+    <div className={className}>
       <label htmlFor={htmlFor} className="mb-1.5 block text-sm font-medium text-a-text">
         {label}
         {optional && <span className="ml-1.5 text-xs font-normal text-a-faint">(opcional)</span>}

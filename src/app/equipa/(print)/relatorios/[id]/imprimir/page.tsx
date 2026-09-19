@@ -1,10 +1,21 @@
+import { Fragment } from "react";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { requireSession } from "@/lib/auth";
 import { getSiteSettings } from "@/lib/settings";
-import { formatCentimosNumero } from "@/lib/relatorios/dinheiro";
+import {
+  formatCentimosNumero,
+  quantidadeMilParaTexto,
+  taxaIvaParaTexto,
+} from "@/lib/relatorios/dinheiro";
 import { formatDataHoraLuanda, rotuloDia } from "@/lib/relatorios/dia";
-import { ROTULO_TIPO, calcularTotais, type LinhaVista } from "@/lib/relatorios/resumo";
+import {
+  ROTULO_CONTRAPARTE,
+  ROTULO_TIPO,
+  calcularTotais,
+  totalDoRegisto,
+  type RegistoVista,
+} from "@/lib/relatorios/resumo";
 import { carregarRelatorio } from "@/lib/relatorios/queries";
 import { acessoRelatorios, podeVerRelatorio } from "@/lib/relatorios/acesso";
 import { BotaoImprimir } from "@/components/premios/BotaoImprimir";
@@ -35,8 +46,8 @@ export default async function ImprimirRelatorioPage({
   if (!relatorio || !podeVerRelatorio(session, acesso, relatorio.autorId)) notFound();
 
   const totais = calcularTotais(relatorio.linhas);
-  const vendas = relatorio.linhas.filter((l) => l.tipo === "VENDA");
-  const despesas = relatorio.linhas.filter((l) => l.tipo === "DESPESA");
+  const vendas = relatorio.registos.filter((r) => r.tipo === "VENDA");
+  const despesas = relatorio.registos.filter((r) => r.tipo === "DESPESA");
   const finalizado = relatorio.estado === "FINALIZADO";
 
   return (
@@ -73,8 +84,8 @@ export default async function ImprimirRelatorioPage({
           </div>
         </header>
 
-        <Seccao titulo="Vendas" linhas={vendas} total={totais.vendas} />
-        <Seccao titulo="Despesas" linhas={despesas} total={totais.despesas} />
+        <Seccao titulo="Vendas" registos={vendas} total={totais.vendas} />
+        <Seccao titulo="Despesas" registos={despesas} total={totais.despesas} />
 
         <section className="mt-6">
           <h2 className="mb-2 font-display text-[11pt] font-bold text-ink">Totais</h2>
@@ -134,42 +145,105 @@ export default async function ImprimirRelatorioPage({
   );
 }
 
+/**
+ * Sales or expenses on paper, one block per record.
+ *
+ * The client heads the block and the articles sit under it, which is how the
+ * sheet gets reconciled against the documents that were issued — a flat list
+ * of lines makes you work out which three of them were the same sale.
+ */
 function Seccao({
   titulo,
-  linhas,
+  registos,
   total,
 }: {
   titulo: string;
-  linhas: LinhaVista[];
+  registos: RegistoVista[];
   total: number;
 }) {
+  const numLinhas = registos.reduce((soma, registo) => soma + registo.linhas.length, 0);
+
   return (
     <section className="mt-6 first:mt-0">
       <h2 className="mb-2 font-display text-[11pt] font-bold text-ink">
-        {titulo} ({linhas.length})
+        {titulo} ({registos.length} registo{registos.length === 1 ? "" : "s"}, {numLinhas} linha
+        {numLinhas === 1 ? "" : "s"})
       </h2>
-      {linhas.length === 0 ? (
+      {registos.length === 0 ? (
         <p className="text-[8.5pt] text-ink-soft">Sem {titulo.toLowerCase()} registadas.</p>
       ) : (
         <table>
           <thead>
             <tr>
               <th>Descrição</th>
-              <th>Método</th>
+              <th className="num">Qtd.</th>
+              <th className="num">Preço unit.</th>
               <th className="num">Valor (Kz)</th>
             </tr>
           </thead>
           <tbody>
-            {linhas.map((linha) => (
-              <tr key={linha.id}>
-                <td>{linha.descricao}</td>
-                <td>{linha.metodoPagamentoNome}</td>
-                <td className="num">{formatCentimosNumero(linha.valorCentimos)}</td>
-              </tr>
+            {registos.map((registo, indice) => (
+              // Each record is a group of rows: its heading, its articles, and
+              // — when there is more than one — its own subtotal.
+              <Fragment key={registo.id}>
+                <tr>
+                  <td colSpan={4} className="pt-2">
+                    <strong>
+                      #{indice + 1} ·{" "}
+                      {registo.clienteNome ??
+                        `Sem ${ROTULO_CONTRAPARTE[registo.tipo].toLowerCase()}`}
+                    </strong>
+                    <span className="text-ink-soft">
+                      {" "}
+                      · {registo.metodoPagamentoNome}
+                      {registo.clienteNif ? ` · NIF ${registo.clienteNif}` : ""}
+                      {registo.facturaCodigo ? ` · ${registo.facturaCodigo}` : ""}
+                    </span>
+                  </td>
+                </tr>
+                {registo.linhas.map((linha) => (
+                  <tr key={linha.id}>
+                    <td>
+                      {linha.descricao}
+                      {linha.artigoCodigo ? (
+                        <span className="text-ink-soft"> ({linha.artigoCodigo})</span>
+                      ) : null}
+                    </td>
+                    <td className="num">{quantidadeMilParaTexto(linha.quantidadeMil)}</td>
+                    {/* A taxable price says so, or the row would not multiply
+                        out to its own total. */}
+                    <td className="num">
+                      {formatCentimosNumero(linha.precoUnitarioCentimos)}
+                      {linha.taxaIvaCentesimos > 0 ? (
+                        <span className="text-ink-soft">
+                          {" "}
+                          + IVA {taxaIvaParaTexto(linha.taxaIvaCentesimos)}
+                        </span>
+                      ) : null}
+                    </td>
+                    <td className="num">{formatCentimosNumero(linha.valorCentimos)}</td>
+                  </tr>
+                ))}
+                {registo.linhas.length > 1 && (
+                  <tr>
+                    <td colSpan={3} className="text-ink-soft">
+                      Subtotal do registo #{indice + 1}
+                    </td>
+                    <td className="num">{formatCentimosNumero(totalDoRegisto(registo))}</td>
+                  </tr>
+                )}
+                {registo.nota && (
+                  <tr>
+                    <td colSpan={4} className="text-ink-soft">
+                      Nota: {registo.nota}
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             ))}
             <tr>
-              <td colSpan={2}>
-                <strong>Total de {ROTULO_TIPO[linhas[0]!.tipo].toLowerCase()}s</strong>
+              <td colSpan={3}>
+                <strong>Total de {ROTULO_TIPO[registos[0]!.tipo].toLowerCase()}s</strong>
               </td>
               <td className="num">
                 <strong>{formatCentimosNumero(total)}</strong>

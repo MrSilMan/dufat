@@ -10,7 +10,7 @@ import { BotoesDownload, DetalheRelatorio } from "@/components/relatorios/Detalh
 import {
   EstadoRelatorioBadge,
   ResumoRelatorio,
-  TabelaLinhas,
+  TabelaRegistos,
 } from "@/components/relatorios/ResumoRelatorio";
 
 export const metadata: Metadata = { title: "Relatório diário", robots: { index: false } };
@@ -71,7 +71,7 @@ export default async function RelatorioPage({ params }: { params: Promise<{ id: 
         <EditorRelatorio
           relatorioId={relatorio.id}
           versao={relatorio.versao}
-          linhas={relatorio.linhas}
+          registos={relatorio.registos}
           metodos={metodos}
         />
       ) : (
@@ -86,7 +86,7 @@ export default async function RelatorioPage({ params }: { params: Promise<{ id: 
               <BotoesDownload relatorioId={relatorio.id} className="btn-admin-ghost min-h-11" />
             </div>
           </div>
-          <TabelaLinhas linhas={relatorio.linhas} />
+          <TabelaRegistos registos={relatorio.registos} />
           <ResumoRelatorio totais={calcularTotais(relatorio.linhas)} />
         </>
       )}

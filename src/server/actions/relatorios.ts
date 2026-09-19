@@ -8,20 +8,31 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { recordAudit } from "@/lib/audit";
 import { assertAdminRole, requireSession, type Session } from "@/lib/auth";
-import { formatCentimos, parseValorCentimos } from "@/lib/relatorios/dinheiro";
+import {
+  formatCentimos,
+  parseQuantidadeMil,
+  parseValorCentimos,
+  totalDaLinha,
+  MAX_CENTIMOS,
+} from "@/lib/relatorios/dinheiro";
 import { diaParaDate, hojeLuanda, isDia, rotuloDiaCurto, dateParaDia } from "@/lib/relatorios/dia";
-import { calcularTotais, type LinhaVista } from "@/lib/relatorios/resumo";
-import { SELECT_LINHA, vistaLinha } from "@/lib/relatorios/queries";
+import {
+  calcularTotais,
+  totalDoRegisto,
+  type RegistoVista,
+  type TipoLinha,
+} from "@/lib/relatorios/resumo";
+import { SELECT_LINHA, SELECT_REGISTO, vistaLinha, vistaRegisto } from "@/lib/relatorios/queries";
 import { acessoRelatorios, podeVerRelatorio } from "@/lib/relatorios/acesso";
 import {
   abrirRelatorioSchema,
   acessoRelatoriosSchema,
   alternarMetodoPagamentoSchema,
-  apagarLinhaSchema,
+  apagarRegistoSchema,
   finalizarRelatorioSchema,
-  linhaRelatorioSchema,
   metodoPagamentoSchema,
   reabrirRelatorioSchema,
+  registoRelatorioSchema,
   type FormState,
 } from "@/lib/validation";
 
@@ -45,24 +56,28 @@ function codigoPrisma(error: unknown): string | undefined {
 
 /**
  * Why a write was refused, in a shape the editor can act on without parsing a
- * message: a conflict carries the row as the server now has it, so the screen
- * can offer "keep mine" or "use the saved one" instead of just failing.
+ * message: a conflict carries the record as the server now has it, so the
+ * screen can offer "keep mine" or "use the saved one" instead of just failing.
+ *
+ * Validation errors are keyed by field; a line's errors are keyed
+ * `linhas.<id>.<campo>`, so the editor can put the message under the right
+ * input of the right line without knowing the order they were sent in.
  */
 export type FalhaRelatorio =
   | { ok: false; codigo: "VALIDACAO"; message: string; errors: Record<string, string[]> }
-  /** `atual` is null when the line was deleted elsewhere. */
-  | { ok: false; codigo: "CONFLITO"; message: string; atual: LinhaVista | null }
+  /** `atual` is null when the record was deleted elsewhere. */
+  | { ok: false; codigo: "CONFLITO"; message: string; atual: RegistoVista | null }
   | { ok: false; codigo: "FECHADO" | "NAO_ENCONTRADO" | "SEM_ACESSO" | "ERRO"; message: string };
 
-export type ResultadoLinha =
-  | { ok: true; linha: LinhaVista; versaoRelatorio: number }
+export type ResultadoRegisto =
+  | { ok: true; registo: RegistoVista; versaoRelatorio: number }
   | FalhaRelatorio;
 
 export type ResultadoApagar = { ok: true; versaoRelatorio: number } | FalhaRelatorio;
 
 export type ResultadoFinalizar = { ok: true } | FalhaRelatorio;
 
-export type EntradaLinha = z.input<typeof linhaRelatorioSchema>;
+export type EntradaRegisto = z.input<typeof registoRelatorioSchema>;
 
 /**
  * Thrown inside a transaction to roll it back and hand a result to the caller.
@@ -77,7 +92,7 @@ class Recusa extends Error {
 const recusar = (codigo: "FECHADO" | "NAO_ENCONTRADO", message: string) =>
   new Recusa({ ok: false, codigo, message });
 
-const conflito = (atual: LinhaVista | null, message: string) =>
+const conflito = (atual: RegistoVista | null, message: string) =>
   new Recusa({ ok: false, codigo: "CONFLITO", message, atual });
 
 const FALHA_GENERICA: FalhaRelatorio = {
@@ -103,20 +118,29 @@ async function podeRegistar(session: Session): Promise<boolean> {
   return (await acessoRelatorios(session)).registar;
 }
 
-/** What a history row records about a line — the amount as a plain number. */
-function instantaneo(linha: {
-  tipo: string;
-  descricao: string;
-  valorCentimos: number;
-  metodoPagamentoId: string;
-  metodoPagamentoNome: string;
-}): Prisma.InputJsonObject {
+/**
+ * What a history row records about a record: enough to read back what changed
+ * without joining to rows that may since have been deleted. Amounts are plain
+ * numbers of cêntimos.
+ */
+function instantaneo(registo: RegistoVista): Prisma.InputJsonObject {
   return {
-    tipo: linha.tipo,
-    descricao: linha.descricao,
-    valorCentimos: linha.valorCentimos,
-    metodoPagamentoId: linha.metodoPagamentoId,
-    metodoPagamentoNome: linha.metodoPagamentoNome,
+    tipo: registo.tipo,
+    clienteNome: registo.clienteNome,
+    clienteNif: registo.clienteNif,
+    facturaCodigo: registo.facturaCodigo,
+    metodoPagamentoId: registo.metodoPagamentoId,
+    metodoPagamentoNome: registo.metodoPagamentoNome,
+    nota: registo.nota,
+    total: totalDoRegisto(registo),
+    linhas: registo.linhas.map((linha) => ({
+      descricao: linha.descricao,
+      quantidadeMil: linha.quantidadeMil,
+      precoUnitarioCentimos: linha.precoUnitarioCentimos,
+      taxaIvaCentesimos: linha.taxaIvaCentesimos,
+      valorCentimos: linha.valorCentimos,
+      artigoCodigo: linha.artigoCodigo,
+    })),
   };
 }
 
@@ -175,62 +199,174 @@ async function metodoAtivo(tx: Tx, id: string) {
   return metodo;
 }
 
-function mesmoConteudo(
-  linha: LinhaVista,
-  dados: { tipo: string; descricao: string; metodoPagamentoId: string },
-  valorCentimos: number,
-): boolean {
+/** A record and what was sent are the same when nothing a person typed differs. */
+function mesmoConteudo(registo: RegistoVista, enviado: RegistoPreparado): boolean {
   return (
-    linha.tipo === dados.tipo &&
-    linha.descricao === dados.descricao &&
-    linha.valorCentimos === valorCentimos &&
-    linha.metodoPagamentoId === dados.metodoPagamentoId
+    registo.tipo === enviado.tipo &&
+    registo.clienteNome === enviado.clienteNome &&
+    registo.clienteNif === enviado.clienteNif &&
+    registo.clienteInvgestId === enviado.clienteInvgestId &&
+    registo.facturaInvgestId === enviado.facturaInvgestId &&
+    registo.facturaCodigo === enviado.facturaCodigo &&
+    registo.nota === enviado.nota &&
+    registo.metodoPagamentoId === enviado.metodoPagamentoId &&
+    registo.linhas.length === enviado.linhas.length &&
+    registo.linhas.every((linha, indice) => {
+      const outra = enviado.linhas[indice]!;
+      return (
+        linha.id === outra.id &&
+        linha.descricao === outra.descricao &&
+        linha.quantidadeMil === outra.quantidadeMil &&
+        linha.precoUnitarioCentimos === outra.precoUnitarioCentimos &&
+        linha.taxaIvaCentesimos === outra.taxaIvaCentesimos &&
+        linha.artigoInvgestId === outra.artigoInvgestId &&
+        linha.artigoCodigo === outra.artigoCodigo
+      );
+    })
   );
 }
 
-// ---------- Colaborador: lines ----------
+// ---------- Colaborador: records ----------
+
+/** A record with its amounts parsed — what actually gets written. */
+type RegistoPreparado = {
+  relatorioId: string;
+  id: string;
+  versao: number | null;
+  tipo: TipoLinha;
+  clienteNome: string | null;
+  clienteNif: string | null;
+  clienteInvgestId: string | null;
+  facturaInvgestId: string | null;
+  facturaCodigo: string | null;
+  nota: string | null;
+  metodoPagamentoId: string;
+  linhas: {
+    id: string;
+    descricao: string;
+    quantidadeMil: number;
+    precoUnitarioCentimos: number;
+    taxaIvaCentesimos: number;
+    valorCentimos: number;
+    artigoInvgestId: string | null;
+    artigoCodigo: string | null;
+  }[];
+};
 
 /**
- * Creates or edits one line — called by the editor as the colaborador works.
+ * Parses the quantities and prices the colaborador typed, with the same
+ * functions the editor used to show the totals on screen.
+ *
+ * Errors are keyed per line (`linhas.<id>.<campo>`) so each message lands under
+ * the input it is about, however the lines were reordered since.
+ */
+function prepararRegisto(
+  dados: z.output<typeof registoRelatorioSchema>,
+): RegistoPreparado | FalhaRelatorio {
+  const errors: Record<string, string[]> = {};
+  const linhas: RegistoPreparado["linhas"] = [];
+
+  const ids = new Set<string>();
+  for (const linha of dados.linhas) {
+    if (ids.has(linha.id)) {
+      return { ok: false, codigo: "ERRO", message: "Pedido inválido." };
+    }
+    ids.add(linha.id);
+
+    const quantidadeMil = parseQuantidadeMil(linha.quantidade);
+    const precoUnitarioCentimos = parseValorCentimos(linha.precoUnitario);
+
+    if (quantidadeMil === null) {
+      errors[`linhas.${linha.id}.quantidade`] = ["Quantidade inválida (ex.: 2 ou 2,5)."];
+    }
+    if (precoUnitarioCentimos === null || precoUnitarioCentimos <= 0) {
+      errors[`linhas.${linha.id}.precoUnitario`] = ["Preço inválido (ex.: 1 500,00)."];
+    }
+    if (quantidadeMil === null || precoUnitarioCentimos === null) continue;
+
+    const valorCentimos = totalDaLinha(quantidadeMil, precoUnitarioCentimos, linha.taxaIva);
+    if (valorCentimos <= 0 || valorCentimos > MAX_CENTIMOS) {
+      errors[`linhas.${linha.id}.precoUnitario`] = ["Total da linha fora dos limites."];
+      continue;
+    }
+
+    linhas.push({
+      id: linha.id,
+      descricao: linha.descricao,
+      quantidadeMil,
+      precoUnitarioCentimos,
+      taxaIvaCentesimos: linha.taxaIva,
+      valorCentimos,
+      artigoInvgestId: linha.artigoInvgestId,
+      artigoCodigo: linha.artigoCodigo,
+    });
+  }
+
+  if (Object.keys(errors).length > 0) {
+    return { ok: false, codigo: "VALIDACAO", message: "Verifique os campos assinalados.", errors };
+  }
+
+  const total = linhas.reduce((soma, linha) => soma + linha.valorCentimos, 0);
+  if (total > MAX_CENTIMOS) {
+    const message = "O total do registo excede o limite.";
+    return { ok: false, codigo: "VALIDACAO", message, errors: { linhas: [message] } };
+  }
+
+  return {
+    relatorioId: dados.relatorioId,
+    id: dados.id,
+    versao: dados.versao,
+    tipo: dados.tipo,
+    clienteNome: dados.clienteNome,
+    clienteNif: dados.clienteNif,
+    clienteInvgestId: dados.clienteInvgestId,
+    facturaInvgestId: dados.facturaInvgestId,
+    facturaCodigo: dados.facturaCodigo,
+    nota: dados.nota,
+    metodoPagamentoId: dados.metodoPagamentoId,
+    linhas,
+  };
+}
+
+/**
+ * Creates or edits one record — called by the editor as the colaborador works.
  *
  * Returns a result instead of redirecting, unlike `guardarAtividade`: autosave
  * runs in the background while the person keeps typing, and needs the new
  * versions back to base its next save on.
  *
- * Two safeguards make the autosave safe to retry and safe across tabs:
+ * Three safeguards make the autosave safe to retry and safe across tabs:
  *
- *   - the line id is generated by the browser, so a save whose response was
- *     lost and is sent again finds the row it already wrote;
+ *   - the record and line ids are generated by the browser, so a save whose
+ *     response was lost and is sent again finds the rows it already wrote;
  *   - edits name the `versao` they were based on, so a tab holding an older
- *     copy is told about the newer one rather than silently overwriting it.
+ *     copy is told about the newer one rather than silently overwriting it;
+ *   - the record and all of its lines are written in one transaction, so a
+ *     sale of three articles is never stored as two.
  */
-export async function guardarLinha(input: EntradaLinha): Promise<ResultadoLinha> {
+export async function guardarRegisto(input: EntradaRegisto): Promise<ResultadoRegisto> {
   const session = await requireSession("/equipa/entrar");
   if (!(await podeRegistar(session))) return SEM_ACESSO;
 
-  const result = linhaRelatorioSchema.safeParse(input);
+  const result = registoRelatorioSchema.safeParse(input);
   if (!result.success) {
     return { ...validationError(result.error), ok: false, codigo: "VALIDACAO" } as FalhaRelatorio;
   }
-  const dados = result.data;
 
-  const valorCentimos = parseValorCentimos(dados.valor);
-  if (valorCentimos === null || valorCentimos <= 0) {
-    const message = "Valor inválido (ex.: 1 500,00).";
-    return { ok: false, codigo: "VALIDACAO", message, errors: { valor: [message] } };
-  }
+  const preparado = prepararRegisto(result.data);
+  if ("ok" in preparado) return preparado;
 
   // Twice at most: a retried create can collide on the primary key with the
   // original request still in flight, and on the second pass it finds that row.
   for (let tentativa = 0; tentativa < 2; tentativa += 1) {
     try {
-      return await prisma.$transaction((tx) => escreverLinha(tx, session, dados, valorCentimos));
+      return await prisma.$transaction((tx) => escreverRegisto(tx, session, preparado));
     } catch (error) {
       if (error instanceof Recusa) return error.resultado;
       if (codigoPrisma(error) === "P2002" && tentativa === 0) continue;
-      logger.error("relatorio_linha_falhou", {
-        relatorioId: dados.relatorioId,
-        linhaId: dados.id,
+      logger.error("relatorio_registo_falhou", {
+        relatorioId: preparado.relatorioId,
+        registoId: preparado.id,
         by: session.email,
         message: error instanceof Error ? error.message : String(error),
       });
@@ -240,77 +376,119 @@ export async function guardarLinha(input: EntradaLinha): Promise<ResultadoLinha>
   return FALHA_GENERICA;
 }
 
-async function escreverLinha(
+/** The record as it now stands, read back inside the transaction that wrote it. */
+async function lerRegisto(tx: Tx, id: string): Promise<RegistoVista | null> {
+  const registo = await tx.registoRelatorio.findUnique({ where: { id }, select: SELECT_REGISTO });
+  return registo ? vistaRegisto(registo) : null;
+}
+
+/** Line rows for a record — `tipo` and the method are copied down from it. */
+function linhasParaEscrever(
+  dados: RegistoPreparado,
+  metodoPagamentoNome: string,
+): Prisma.LinhaRelatorioUncheckedCreateInput[] {
+  return dados.linhas.map((linha, ordem) => ({
+    id: linha.id,
+    registoId: dados.id,
+    relatorioId: dados.relatorioId,
+    tipo: dados.tipo,
+    descricao: linha.descricao,
+    quantidadeMil: linha.quantidadeMil,
+    precoUnitarioCentimos: BigInt(linha.precoUnitarioCentimos),
+    taxaIvaCentesimos: linha.taxaIvaCentesimos,
+    valorCentimos: BigInt(linha.valorCentimos),
+    artigoInvgestId: linha.artigoInvgestId,
+    artigoCodigo: linha.artigoCodigo,
+    metodoPagamentoId: dados.metodoPagamentoId,
+    metodoPagamentoNome,
+    ordem,
+  }));
+}
+
+async function escreverRegisto(
   tx: Tx,
   session: Session,
-  dados: z.output<typeof linhaRelatorioSchema>,
-  valorCentimos: number,
-): Promise<ResultadoLinha> {
+  dados: RegistoPreparado,
+): Promise<ResultadoRegisto> {
   const relatorio = await relatorioDoAutor(tx, dados.relatorioId, session);
 
-  const existente = await tx.linhaRelatorio.findUnique({
+  const existente = await tx.registoRelatorio.findUnique({
     where: { id: dados.id },
-    select: { ...SELECT_LINHA, relatorioId: true },
+    select: { ...SELECT_REGISTO, relatorioId: true },
   });
   if (existente && existente.relatorioId !== dados.relatorioId) {
-    throw recusar("NAO_ENCONTRADO", "Linha não encontrada.");
+    throw recusar("NAO_ENCONTRADO", "Registo não encontrado.");
+  }
+
+  // A line id already in use elsewhere would be moved into this record by the
+  // write below, silently taking it off another record.
+  const alheias = await tx.linhaRelatorio.findMany({
+    where: { id: { in: dados.linhas.map((linha) => linha.id) }, registoId: { not: dados.id } },
+    select: { id: true },
+  });
+  if (alheias.length > 0) {
+    throw recusar("NAO_ENCONTRADO", "Linha já registada noutro registo.");
   }
 
   if (!existente) {
-    // The client believed this line was saved; it has since been deleted
+    // The client believed this record was saved; it has since been deleted
     // elsewhere. Recreating it silently would undo that deletion.
     if (dados.versao !== null) {
-      throw conflito(null, "Esta linha foi apagada noutra janela.");
+      throw conflito(null, "Este registo foi apagado noutra janela.");
     }
 
     const metodo = await metodoAtivo(tx, dados.metodoPagamentoId);
-    const criada = await tx.linhaRelatorio.create({
+    await tx.registoRelatorio.create({
       data: {
         id: dados.id,
         relatorioId: dados.relatorioId,
         tipo: dados.tipo,
-        descricao: dados.descricao,
-        valorCentimos: BigInt(valorCentimos),
+        clienteNome: dados.clienteNome,
+        clienteNif: dados.clienteNif,
+        clienteInvgestId: dados.clienteInvgestId,
+        facturaInvgestId: dados.facturaInvgestId,
+        facturaCodigo: dados.facturaCodigo,
+        nota: dados.nota,
         metodoPagamentoId: dados.metodoPagamentoId,
         metodoPagamentoNome: metodo.nome,
       },
-      select: SELECT_LINHA,
     });
-    const linha = vistaLinha(criada);
+    await tx.linhaRelatorio.createMany({ data: linhasParaEscrever(dados, metodo.nome) });
 
+    const registo = (await lerRegisto(tx, dados.id))!;
     await tx.relatorioHistorico.create({
       data: {
         relatorioId: dados.relatorioId,
-        linhaId: linha.id,
-        acao: "LINHA_ADICIONADA",
-        depois: instantaneo(linha),
+        registoId: registo.id,
+        acao: "REGISTO_ADICIONADO",
+        depois: instantaneo(registo),
         userId: session.sub,
         userName: session.name,
       },
     });
 
-    return { ok: true, linha, versaoRelatorio: await avancarVersao(tx, dados.relatorioId) };
+    return { ok: true, registo, versaoRelatorio: await avancarVersao(tx, dados.relatorioId) };
   }
 
-  const anterior = vistaLinha(existente);
+  const anterior = vistaRegisto(existente);
 
   if (dados.versao === null) {
     // A create sent again after its response was lost. Same content: that is
-    // the row this request already wrote.
-    if (mesmoConteudo(anterior, dados, valorCentimos)) {
-      return { ok: true, linha: anterior, versaoRelatorio: relatorio.versao };
+    // the record this request already wrote.
+    if (mesmoConteudo(anterior, dados)) {
+      return { ok: true, registo: anterior, versaoRelatorio: relatorio.versao };
     }
-    throw conflito(anterior, "Esta linha já tinha sido guardada com outros valores.");
+    throw conflito(anterior, "Este registo já tinha sido guardado com outros valores.");
   }
 
   if (anterior.versao !== dados.versao) {
-    throw conflito(anterior, "Esta linha foi alterada noutra janela.");
+    throw conflito(anterior, "Este registo foi alterado noutra janela.");
   }
 
-  // Autosave fires on blur too; an unchanged line is not an edit, and must not
-  // fill the history with rows that say nothing happened.
-  if (mesmoConteudo(anterior, dados, valorCentimos)) {
-    return { ok: true, linha: anterior, versaoRelatorio: relatorio.versao };
+  // Autosave fires on blur too; an unchanged record is not an edit, and must
+  // not fill the history with rows that say nothing happened.
+  if (mesmoConteudo(anterior, dados)) {
+    return { ok: true, registo: anterior, versaoRelatorio: relatorio.versao };
   }
 
   // Keeping the method keeps its recorded name, even if the method has since
@@ -320,58 +498,65 @@ async function escreverLinha(
       ? anterior.metodoPagamentoNome
       : (await metodoAtivo(tx, dados.metodoPagamentoId)).nome;
 
-  const { count } = await tx.linhaRelatorio.updateMany({
+  const { count } = await tx.registoRelatorio.updateMany({
     where: { id: dados.id, versao: dados.versao },
     data: {
       tipo: dados.tipo,
-      descricao: dados.descricao,
-      valorCentimos: BigInt(valorCentimos),
+      clienteNome: dados.clienteNome,
+      clienteNif: dados.clienteNif,
+      clienteInvgestId: dados.clienteInvgestId,
+      facturaInvgestId: dados.facturaInvgestId,
+      facturaCodigo: dados.facturaCodigo,
+      nota: dados.nota,
       metodoPagamentoId: dados.metodoPagamentoId,
       metodoPagamentoNome,
       versao: { increment: 1 },
     },
   });
   if (count === 0) {
-    const atual = await tx.linhaRelatorio.findUnique({
-      where: { id: dados.id },
-      select: SELECT_LINHA,
-    });
-    throw conflito(atual ? vistaLinha(atual) : null, "Esta linha foi alterada noutra janela.");
+    throw conflito(await lerRegisto(tx, dados.id), "Este registo foi alterado noutra janela.");
   }
 
-  const linha: LinhaVista = {
-    id: dados.id,
-    tipo: dados.tipo,
-    descricao: dados.descricao,
-    valorCentimos,
-    metodoPagamentoId: dados.metodoPagamentoId,
-    metodoPagamentoNome,
-    versao: dados.versao + 1,
-  };
+  // Lines are replaced wholesale: what was sent is the record's contents now.
+  await tx.linhaRelatorio.deleteMany({
+    where: { registoId: dados.id, id: { notIn: dados.linhas.map((linha) => linha.id) } },
+  });
+  for (const linha of linhasParaEscrever(dados, metodoPagamentoNome)) {
+    const { id, ...campos } = linha;
+    await tx.linhaRelatorio.upsert({
+      where: { id },
+      create: { id, ...campos },
+      update: { ...campos, versao: { increment: 1 } },
+    });
+  }
 
+  const registo = (await lerRegisto(tx, dados.id))!;
   await tx.relatorioHistorico.create({
     data: {
       relatorioId: dados.relatorioId,
-      linhaId: linha.id,
-      acao: "LINHA_EDITADA",
+      registoId: registo.id,
+      acao: "REGISTO_EDITADO",
       antes: instantaneo(anterior),
-      depois: instantaneo(linha),
+      depois: instantaneo(registo),
       userId: session.sub,
       userName: session.name,
     },
   });
 
-  return { ok: true, linha, versaoRelatorio: await avancarVersao(tx, dados.relatorioId) };
+  return { ok: true, registo, versaoRelatorio: await avancarVersao(tx, dados.relatorioId) };
 }
 
-/** Deletes one line from a draft. Deleting a line that is already gone succeeds. */
-export async function apagarLinha(
-  input: z.input<typeof apagarLinhaSchema>,
+/**
+ * Deletes one record and its lines from a draft. Deleting a record that is
+ * already gone succeeds.
+ */
+export async function apagarRegisto(
+  input: z.input<typeof apagarRegistoSchema>,
 ): Promise<ResultadoApagar> {
   const session = await requireSession("/equipa/entrar");
   if (!(await podeRegistar(session))) return SEM_ACESSO;
 
-  const result = apagarLinhaSchema.safeParse(input);
+  const result = apagarRegistoSchema.safeParse(input);
   if (!result.success) return { ...FALHA_GENERICA, message: "Pedido inválido." };
   const dados = result.data;
 
@@ -379,37 +564,35 @@ export async function apagarLinha(
     return await prisma.$transaction(async (tx): Promise<ResultadoApagar> => {
       const relatorio = await relatorioDoAutor(tx, dados.relatorioId, session);
 
-      const existente = await tx.linhaRelatorio.findUnique({
+      const existente = await tx.registoRelatorio.findUnique({
         where: { id: dados.id },
-        select: { ...SELECT_LINHA, relatorioId: true },
+        select: { ...SELECT_REGISTO, relatorioId: true },
       });
       if (!existente) return { ok: true, versaoRelatorio: relatorio.versao };
       if (existente.relatorioId !== dados.relatorioId) {
-        throw recusar("NAO_ENCONTRADO", "Linha não encontrada.");
+        throw recusar("NAO_ENCONTRADO", "Registo não encontrado.");
       }
 
-      const anterior = vistaLinha(existente);
+      const anterior = vistaRegisto(existente);
       if (anterior.versao !== dados.versao) {
-        throw conflito(anterior, "Esta linha foi alterada noutra janela antes de a apagar.");
+        throw conflito(anterior, "Este registo foi alterado noutra janela antes de o apagar.");
       }
 
-      const { count } = await tx.linhaRelatorio.deleteMany({
+      // Lines go with it: the foreign key cascades.
+      const { count } = await tx.registoRelatorio.deleteMany({
         where: { id: dados.id, versao: dados.versao },
       });
       if (count === 0) {
-        const atual = await tx.linhaRelatorio.findUnique({
-          where: { id: dados.id },
-          select: SELECT_LINHA,
-        });
+        const atual = await lerRegisto(tx, dados.id);
         if (!atual) return { ok: true, versaoRelatorio: relatorio.versao };
-        throw conflito(vistaLinha(atual), "Esta linha foi alterada noutra janela antes de a apagar.");
+        throw conflito(atual, "Este registo foi alterado noutra janela antes de o apagar.");
       }
 
       await tx.relatorioHistorico.create({
         data: {
           relatorioId: dados.relatorioId,
-          linhaId: dados.id,
-          acao: "LINHA_APAGADA",
+          registoId: dados.id,
+          acao: "REGISTO_APAGADO",
           antes: instantaneo(anterior),
           userId: session.sub,
           userName: session.name,
@@ -420,16 +603,15 @@ export async function apagarLinha(
     });
   } catch (error) {
     if (error instanceof Recusa) return error.resultado;
-    logger.error("relatorio_apagar_linha_falhou", {
+    logger.error("relatorio_apagar_registo_falhou", {
       relatorioId: dados.relatorioId,
-      linhaId: dados.id,
+      registoId: dados.id,
       by: session.email,
       message: error instanceof Error ? error.message : String(error),
     });
     return FALHA_GENERICA;
   }
 }
-
 // ---------- Colaborador: report lifecycle ----------
 
 /**

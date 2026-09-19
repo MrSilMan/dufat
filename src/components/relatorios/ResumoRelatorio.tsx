@@ -1,6 +1,18 @@
 import { cn } from "@/lib/cn";
-import { formatCentimos, formatCentimosNumero } from "@/lib/relatorios/dinheiro";
-import { ROTULO_TIPO, type LinhaVista, type Totais } from "@/lib/relatorios/resumo";
+import {
+  formatCentimos,
+  formatCentimosNumero,
+  quantidadeMilParaTexto,
+  taxaIvaParaTexto,
+} from "@/lib/relatorios/dinheiro";
+import {
+  ROTULO_CONTRAPARTE,
+  ROTULO_TIPO,
+  totalDoRegisto,
+  type LinhaVista,
+  type RegistoVista,
+  type Totais,
+} from "@/lib/relatorios/resumo";
 
 const badgeBase =
   "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium";
@@ -22,7 +34,20 @@ export function EstadoRelatorioBadge({ estado }: { estado: string }) {
 export function ResumoRelatorio({ totais, nota }: { totais: Totais; nota?: string }) {
   return (
     <section className="space-y-4" aria-label="Totais">
-      <div className="grid gap-3 sm:grid-cols-3">
+      <CartoesTotais totais={totais} nota={nota} />
+      <TabelaPorMetodo totais={totais} />
+    </section>
+  );
+}
+
+/**
+ * The three figures on their own, so the editor can keep them in sight above
+ * the records instead of at the foot of a page that grows all day.
+ */
+export function CartoesTotais({ totais, nota }: { totais: Totais; nota?: string }) {
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-3 gap-2 sm:gap-3">
         <Cartao rotulo="Vendas" valor={totais.vendas} detalhe={`${totais.numVendas} linha(s)`} />
         <Cartao
           rotulo="Despesas"
@@ -31,9 +56,14 @@ export function ResumoRelatorio({ totais, nota }: { totais: Totais; nota?: strin
         />
         <Cartao rotulo="Saldo" valor={totais.saldo} detalhe="Vendas − despesas" destaque />
       </div>
-
       {nota && <p className="text-xs text-a-faint">{nota}</p>}
+    </div>
+  );
+}
 
+export function TabelaPorMetodo({ totais }: { totais: Totais }) {
+  return (
+    <>
       {totais.porMetodo.length > 0 && (
         <div className="card-admin overflow-hidden">
           <h3 className="border-b border-a-line px-5 py-3 text-sm font-bold text-a-text">
@@ -69,7 +99,7 @@ export function ResumoRelatorio({ totais, nota }: { totais: Totais; nota?: strin
           </div>
         </div>
       )}
-    </section>
+    </>
   );
 }
 
@@ -85,24 +115,46 @@ function Cartao({
   destaque?: boolean;
 }) {
   return (
-    <div className={cn("card-admin p-4", destaque && "border-a-accent/30")}>
-      <p className="text-xs font-semibold uppercase tracking-wider text-a-faint">{rotulo}</p>
+    <div className={cn("card-admin p-3 sm:p-4", destaque && "border-a-accent/30")}>
+      <p className="text-[0.65rem] font-semibold uppercase tracking-wider text-a-faint sm:text-xs">
+        {rotulo}
+        <span className="sm:hidden"> (Kz)</span>
+      </p>
       <p
         className={cn(
-          "mt-1 font-mono text-lg font-bold tabular-nums",
+          // The three sit side by side even on a phone — the day's figures are
+          // read together — so the amount is the one that gives way: smaller,
+          // and with the currency moved up to the label rather than wrapping.
+          "mt-1 font-mono text-sm font-bold tabular-nums sm:text-lg",
           destaque && valor < 0 ? "text-rose-500" : "text-a-text",
         )}
       >
-        {formatCentimos(valor)}
+        <span className="sm:hidden">{formatCentimosNumero(valor)}</span>
+        <span className="hidden sm:inline">{formatCentimos(valor)}</span>
       </p>
-      <p className="mt-0.5 text-xs text-a-muted">{detalhe}</p>
+      <p className="mt-0.5 hidden text-xs text-a-muted sm:block">{detalhe}</p>
     </div>
   );
 }
 
-/** Read-only lines, sales first — for finalized reports and the admin view. */
-export function TabelaLinhas({ linhas }: { linhas: readonly LinhaVista[] }) {
-  if (linhas.length === 0) {
+/** "2 × 85 000,00 Kz", and the IVA when the price is the taxable one. */
+function calculoDaLinha(linha: LinhaVista): string {
+  const calculo = `${quantidadeMilParaTexto(linha.quantidadeMil)} × ${formatCentimosNumero(linha.precoUnitarioCentimos)} Kz`;
+  return linha.taxaIvaCentesimos > 0
+    ? `${calculo} + IVA ${taxaIvaParaTexto(linha.taxaIvaCentesimos)}`
+    : calculo;
+}
+
+/**
+ * The records as a reviewer reads them: each sale or expense with its client,
+ * how it was paid and the articles under it.
+ *
+ * Laid out as rows rather than a table on purpose — a table of five columns
+ * either scrolls sideways on a phone or shrinks the descriptions to nothing,
+ * and this is the view a manager opens on a phone to check the day.
+ */
+export function TabelaRegistos({ registos }: { registos: readonly RegistoVista[] }) {
+  if (registos.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-a-line-strong p-8 text-center text-sm text-a-muted">
         Sem vendas nem despesas registadas.
@@ -110,46 +162,66 @@ export function TabelaLinhas({ linhas }: { linhas: readonly LinhaVista[] }) {
     );
   }
 
-  const ordenadas = [...linhas].sort((a, b) =>
+  const ordenados = [...registos].sort((a, b) =>
     a.tipo === b.tipo ? 0 : a.tipo === "VENDA" ? -1 : 1,
   );
 
   return (
-    <div className="card-admin overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-xl text-sm">
-          <thead>
-            <tr className="border-b border-a-line text-left text-xs uppercase tracking-wider text-a-faint">
-              <th className="px-5 py-3 font-semibold">Tipo</th>
-              <th className="px-5 py-3 font-semibold">Descrição</th>
-              <th className="px-5 py-3 font-semibold">Método</th>
-              <th className="px-5 py-3 text-right font-semibold">Valor (Kz)</th>
-            </tr>
-          </thead>
-          <tbody className="table-rows">
-            {ordenadas.map((linha) => (
-              <tr key={linha.id}>
-                <td className="px-5 py-3">
-                  <span
-                    className={cn(
-                      badgeBase,
-                      linha.tipo === "VENDA" ? "badge-success" : "badge-danger",
-                    )}
-                  >
-                    {ROTULO_TIPO[linha.tipo]}
+    <ul className="space-y-3">
+      {ordenados.map((registo, indice) => {
+        const total = totalDoRegisto(registo);
+        const venda = registo.tipo === "VENDA";
+        return (
+          <li key={registo.id} className="card-admin overflow-hidden">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-a-line px-4 py-3 sm:px-5">
+              <span className="text-xs font-semibold text-a-faint">#{indice + 1}</span>
+              <span className={cn(badgeBase, venda ? "badge-success" : "badge-danger")}>
+                {ROTULO_TIPO[registo.tipo]}
+              </span>
+              <span className="min-w-0 truncate text-sm font-semibold text-a-text">
+                {registo.clienteNome ?? (
+                  <span className="font-normal text-a-faint">
+                    Sem {ROTULO_CONTRAPARTE[registo.tipo].toLowerCase()}
                   </span>
-                </td>
-                <td className="px-5 py-3 text-a-text">{linha.descricao}</td>
-                <td className="px-5 py-3 text-a-muted">{linha.metodoPagamentoNome}</td>
-                <td className="px-5 py-3 text-right font-mono tabular-nums text-a-text">
-                  {linha.tipo === "DESPESA" ? "−" : ""}
-                  {formatCentimosNumero(linha.valorCentimos)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
+                )}
+              </span>
+              <span
+                className={cn(
+                  "ml-auto font-mono text-base font-bold tabular-nums",
+                  venda ? "text-a-text" : "text-rose-500",
+                )}
+              >
+                {venda ? "" : "−"}
+                {formatCentimos(total)}
+              </span>
+            </div>
+
+            <ul className="divide-y divide-a-line">
+              {registo.linhas.map((linha) => (
+                <li key={linha.id} className="flex items-start gap-3 px-4 py-2.5 text-sm sm:px-5">
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-a-text">{linha.descricao}</span>
+                    <span className="mt-0.5 block text-xs text-a-muted">
+                      {calculoDaLinha(linha)}
+                      {linha.artigoCodigo ? ` · ${linha.artigoCodigo}` : ""}
+                    </span>
+                  </span>
+                  <span className="shrink-0 font-mono tabular-nums text-a-text">
+                    {formatCentimosNumero(linha.valorCentimos)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-a-line px-4 py-2.5 text-xs text-a-muted sm:px-5">
+              <span>{registo.metodoPagamentoNome}</span>
+              {registo.clienteNif && <span>NIF {registo.clienteNif}</span>}
+              {registo.facturaCodigo && <span>Documento {registo.facturaCodigo}</span>}
+              {registo.nota && <span className="min-w-0 truncate italic">{registo.nota}</span>}
+            </div>
+          </li>
+        );
+      })}
+    </ul>
   );
 }

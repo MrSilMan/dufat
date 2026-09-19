@@ -5,7 +5,7 @@ import { calcularTotais } from "@/lib/relatorios/resumo";
 import type { RelatorioCarregado, carregarHistorico } from "@/lib/relatorios/queries";
 import { IconDownload } from "@/components/admin/icons";
 import { HistoricoRelatorio } from "@/components/relatorios/HistoricoRelatorio";
-import { ResumoRelatorio, TabelaLinhas } from "@/components/relatorios/ResumoRelatorio";
+import { ResumoRelatorio, TabelaRegistos } from "@/components/relatorios/ResumoRelatorio";
 
 /** PDF (print page) and CSV for one report; both check access themselves. */
 export function BotoesDownload({ relatorioId, className = "btn-admin-ghost" }: { relatorioId: string; className?: string }) {
@@ -51,7 +51,7 @@ export function DetalheRelatorio({
           viewport leaves the lines table too narrow to read. */}
       <div className="grid items-start gap-8 2xl:grid-cols-[minmax(0,1fr)_24rem]">
         <div className="space-y-6">
-          <TabelaLinhas linhas={relatorio.linhas} />
+          <TabelaRegistos registos={relatorio.registos} />
           <ResumoRelatorio totais={calcularTotais(relatorio.linhas)} />
           {acoes}
         </div>

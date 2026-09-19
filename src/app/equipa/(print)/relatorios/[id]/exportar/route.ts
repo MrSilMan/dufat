@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { centimosParaTexto } from "@/lib/relatorios/dinheiro";
+import {
+  centimosParaTexto,
+  quantidadeMilParaTexto,
+  taxaIvaParaTexto,
+} from "@/lib/relatorios/dinheiro";
 import { formatDataHoraLuanda } from "@/lib/relatorios/dia";
 import { ROTULO_TIPO, calcularTotais } from "@/lib/relatorios/resumo";
 import { carregarRelatorio } from "@/lib/relatorios/queries";
@@ -65,7 +69,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   }
 
   const totais = calcularTotais(relatorio.linhas);
-  const ordenadas = [...relatorio.linhas].sort((a, b) =>
+  const ordenados = [...relatorio.registos].sort((a, b) =>
     a.tipo === b.tipo ? 0 : a.tipo === "VENDA" ? -1 : 1,
   );
 
@@ -80,13 +84,41 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     ),
     linha("Versão", relatorio.versao),
     "",
-    linha("Tipo", "Descrição", "Método de pagamento", "Valor (Kz)"),
-    ...ordenadas.map((l) =>
-      linha(
-        ROTULO_TIPO[l.tipo],
-        textoSeguro(l.descricao),
-        textoSeguro(l.metodoPagamentoNome),
-        centimosParaTexto(l.valorCentimos),
+    // One row per article, each carrying its record's client and document, so
+    // the file can be filtered, pivoted or summed by client in a spreadsheet
+    // without first having to reconstruct which lines belonged together.
+    linha(
+      "Registo",
+      "Tipo",
+      "Cliente/Fornecedor",
+      "NIF",
+      "Documento INVGEST",
+      "Artigo",
+      "Código do artigo",
+      "Quantidade",
+      "Preço unitário (Kz)",
+      "IVA",
+      "Valor (Kz)",
+      "Método de pagamento",
+      "Nota",
+    ),
+    ...ordenados.flatMap((registo, indice) =>
+      registo.linhas.map((l) =>
+        linha(
+          indice + 1,
+          ROTULO_TIPO[registo.tipo],
+          textoSeguro(registo.clienteNome ?? ""),
+          textoSeguro(registo.clienteNif ?? ""),
+          textoSeguro(registo.facturaCodigo ?? ""),
+          textoSeguro(l.descricao),
+          textoSeguro(l.artigoCodigo ?? ""),
+          quantidadeMilParaTexto(l.quantidadeMil),
+          centimosParaTexto(l.precoUnitarioCentimos),
+          l.taxaIvaCentesimos > 0 ? taxaIvaParaTexto(l.taxaIvaCentesimos) : "",
+          centimosParaTexto(l.valorCentimos),
+          textoSeguro(registo.metodoPagamentoNome),
+          textoSeguro(registo.nota ?? ""),
+        ),
       ),
     ),
     "",

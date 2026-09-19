@@ -3,10 +3,12 @@ import "server-only";
 /**
  * Minimal client for the INVGEST e-invoicing API (https://invgest.ao/api/v1).
  *
- * Scope here is deliberately tiny: the catalog **items** endpoints, used to
- * mirror admin products into the INVGEST billing catalog. We do NOT touch the
- * /invoices endpoints — issuing fiscal documents (and AGT submission) is out of
- * scope and irreversible via API.
+ * **Read-only.** We list catalog articles (to mirror them into admin products,
+ * and to look them up while filling in a daily report), clients and issued
+ * documents. We never POST: issuing a fiscal document consumes a series number
+ * and is submitted to the AGT, which the API cannot undo (docs §6), and neither
+ * creating clients nor creating articles is something a till report should do
+ * behind the colaborador's back.
  *
  * Auth: `Authorization: Bearer <key>`. Errors follow `{ error: { code, message } }`.
  * See the INVGEST API documentation, sections 4 (endpoints) and 13 (errors).
@@ -137,6 +139,93 @@ export async function listItems(params: {
   };
 }
 
+/** A client (customer) as returned by INVGEST. */
+export type InvgestClient = {
+  id: string;
+  name: string;
+  taxId?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  address?: string | null;
+};
+
+/** List/search clients (GET /clients, scope clients:read). */
+export async function listClients(
+  params: { search?: string; limit?: number; offset?: number } = {},
+): Promise<{ clients: InvgestClient[]; total: number; hasMore: boolean }> {
+  const res = await request<{
+    data: InvgestClient[];
+    pagination?: { total?: number; hasMore?: boolean };
+  }>("GET", "clients", { query: params });
+  return {
+    clients: res.data ?? [],
+    total: res.pagination?.total ?? res.data?.length ?? 0,
+    hasMore: res.pagination?.hasMore ?? false,
+  };
+}
+
+/**
+ * One line of an issued document.
+ *
+ * `unitPrice` is net, as everywhere else in INVGEST; `net`, `tax` and `total`
+ * are the line already added up, with the discount and the IVA applied. A till
+ * report wants `total` — see {@link precoComIva}.
+ */
+export type InvgestInvoiceItem = {
+  itemId?: string | null;
+  itemCode?: string | null;
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  discountPercent?: number | null;
+  taxRate?: number | null;
+  net?: number | null;
+  tax?: number | null;
+  total?: number | null;
+  unit?: string | null;
+};
+
+/**
+ * An issued document. `status` and `agt.status` are documented in §8; what a
+ * report cares about is the code, the client and the lines.
+ */
+export type InvgestInvoice = {
+  id: string;
+  code?: string | null;
+  type?: string | null;
+  status?: string | null;
+  date?: string | null;
+  client?: { id?: string | null; name?: string | null; taxId?: string | null } | null;
+  totals?: { taxable?: number; tax?: number; total?: number } | null;
+  items?: InvgestInvoiceItem[] | null;
+};
+
+/**
+ * List issued documents (GET /invoices, scope invoices:read).
+ *
+ * INVGEST has no text search on this endpoint — only type/status/date filters
+ * (§4) — so the picker asks for a recent window and narrows it here.
+ */
+export async function listInvoices(
+  params: {
+    type?: string;
+    status?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    limit?: number;
+    offset?: number;
+  } = {},
+): Promise<InvgestInvoice[]> {
+  const res = await request<{ data: InvgestInvoice[] }>("GET", "invoices", { query: params });
+  return res.data ?? [];
+}
+
+/** One document with its lines (GET /invoices/:id, scope invoices:read). */
+export async function getInvoice(id: string): Promise<InvgestInvoice> {
+  const res = await request<{ data: InvgestInvoice }>("GET", `invoices/${encodeURIComponent(id)}`);
+  return res.data;
+}
+
 /**
  * Page through /items (100 per page), optionally narrowed by INVGEST's own
  * `search` filter and capped at `maxItems` — used for subset imports.
@@ -157,6 +246,21 @@ export async function listAllItems(
   return all;
 }
 
+/**
+ * A price as the customer pays it, in Kwanzas, from INVGEST's net one.
+ *
+ * Every price INVGEST returns — a catalog article's, a document line's — is net:
+ * `unitPrice` excludes IVA and `taxRate` is the percentage added on top (14 is
+ * the standard Angolan rate). What goes in the till, on a price tag or on a
+ * daily report is the gross price, so prices coming out of the API pass through
+ * here rather than being used as they arrive.
+ */
+export function precoComIva(unitPrice: number, taxRate?: number | null): number {
+  if (!Number.isFinite(unitPrice) || unitPrice <= 0) return 0;
+  const taxa = typeof taxRate === "number" && Number.isFinite(taxRate) && taxRate > 0 ? taxRate : 0;
+  return Math.round(unitPrice * (100 + taxa)) / 100;
+}
+
 /** Map INVGEST error codes to friendly, admin-facing Portuguese messages. */
 export function invgestErrorMessage(error: unknown): string {
   if (!(error instanceof InvgestError)) {
@@ -169,7 +273,7 @@ export function invgestErrorMessage(error: unknown): string {
     case "invalid_key":
       return "Chave INVGEST inválida ou revogada. Verifique a configuração.";
     case "insufficient_scope":
-      return "A chave INVGEST não tem a permissão “items:write”.";
+      return "A chave INVGEST não tem a permissão necessária para esta operação.";
     case "api_not_in_plan":
       return "O plano INVGEST não inclui acesso à API.";
     case "company_inactive":

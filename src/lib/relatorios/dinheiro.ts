@@ -82,3 +82,84 @@ export function centimosParaTexto(centimos: number): string {
   const absoluto = Math.abs(centimos);
   return `${sinal}${Math.floor(absoluto / 100)},${String(absoluto % 100).padStart(2, "0")}`;
 }
+
+// ---------- Quantities ----------
+//
+// Held as thousandths of a unit, so "2,5 m" is 2500 and a quantity is never a
+// float either: 0,1 + 0,2 units of anything must be 0,3.
+
+/** Above any real line, and keeps quantity × price inside 2^53. */
+export const MAX_QUANTIDADE_MIL = 999_999_000;
+
+/**
+ * Parses a typed quantity into thousandths, or null if it is not one.
+ *
+ * Accepts "2", "2,5" and "2.5" — a phone's numeric keypad produces the dot —
+ * and at most three decimals. Unlike an amount, a bare dot here is always a
+ * decimal point: nobody buys 1.500 luminárias.
+ */
+export function parseQuantidadeMil(texto: string): number | null {
+  const limpo = texto.replace(/[\s  ]/g, "").replace(",", ".");
+  if (!limpo || !/^\d*\.?\d*$/.test(limpo) || limpo === ".") return null;
+
+  const [inteiro = "", decimal = ""] = limpo.split(".");
+  if (decimal.length > 3) return null;
+
+  const mil = Number(inteiro || "0") * 1000 + Number(decimal.padEnd(3, "0") || "0");
+  if (!Number.isSafeInteger(mil) || mil <= 0 || mil > MAX_QUANTIDADE_MIL) return null;
+  return mil;
+}
+
+/** 2500 → "2,5"; 1000 → "1". Trailing zeros are dropped, as people write them. */
+export function quantidadeMilParaTexto(mil: number): string {
+  const inteiro = Math.floor(mil / 1000);
+  const decimal = String(mil % 1000).padStart(3, "0").replace(/0+$/, "");
+  return decimal ? `${inteiro},${decimal}` : String(inteiro);
+}
+
+// ---------- IVA ----------
+//
+// A rate is held in hundredths of a percent: 14% is 1400. Only lines filled in
+// from an INVGEST document carry one — there the price is the taxable one and
+// the tax is added on top, exactly as the document does it. A line someone
+// typed carries 0: the price they wrote is already the price that was paid.
+
+/** 100,00% — nothing real comes close, and it keeps the arithmetic bounded. */
+export const MAX_TAXA_IVA = 10_000;
+
+/** 1400 → "14%"; 1750 → "17,5%". */
+export function taxaIvaParaTexto(taxaIvaCentesimos: number): string {
+  const inteiro = Math.floor(taxaIvaCentesimos / 100);
+  const decimal = String(taxaIvaCentesimos % 100).padStart(2, "0").replace(/0+$/, "");
+  return decimal ? `${inteiro},${decimal}%` : `${inteiro}%`;
+}
+
+/**
+ * quantidade × unit price (+ IVA, when the line carries a rate), in cêntimos,
+ * rounded half-up to the cêntimo.
+ *
+ * Exact arithmetic throughout: `2,5 × 85 000,00 Kz` is exactly 212 500,00 Kz,
+ * not 212 499,999… The product of two in-range values can still leave 2^53, so
+ * it is taken as a BigInt; a total that large comes back as an unsafe-looking
+ * number that the caller's `MAX_CENTIMOS` check then refuses.
+ *
+ * The tax is rounded once, on the line's taxable total — which is what INVGEST
+ * does, and the reason a record imported from a document adds up to the same
+ * cêntimo as the document: 10 × 3 508,77 is 35 087,70 + 4 912,28 = 39 999,98
+ * there and here, where a gross unit price would have made it 40 000,00.
+ *
+ * Every argument is non-negative — the parsers refuse anything else — which is
+ * what makes `+500` a half-up rounding rather than a half-away-from-zero one.
+ */
+export function totalDaLinha(
+  quantidadeMil: number,
+  precoUnitarioCentimos: number,
+  taxaIvaCentesimos = 0,
+): number {
+  const produto = BigInt(quantidadeMil) * BigInt(precoUnitarioCentimos);
+  const liquido = (produto + 500n) / 1000n;
+  const taxa = BigInt(Math.min(Math.max(Math.round(taxaIvaCentesimos), 0), MAX_TAXA_IVA));
+  const centimos = taxa === 0n ? liquido : liquido + (liquido * taxa + 5000n) / 10000n;
+  const limite = BigInt(Number.MAX_SAFE_INTEGER);
+  return Number(centimos > limite ? limite : centimos);
+}

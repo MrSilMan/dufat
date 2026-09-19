@@ -2,26 +2,41 @@ import "server-only";
 import type { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
 import { dateParaDia, diaParaDate, hojeLuanda, isDia } from "@/lib/relatorios/dia";
-import type { EstadoRelatorio, LinhaVista, TipoLinha } from "@/lib/relatorios/resumo";
+import type {
+  EstadoRelatorio,
+  LinhaVista,
+  RegistoVista,
+  TipoLinha,
+} from "@/lib/relatorios/resumo";
 
 /** BigInt does not cross the server/client boundary as a plain number. */
 export function vistaLinha(linha: {
   id: string;
   tipo: TipoLinha;
   descricao: string;
+  quantidadeMil: number;
+  precoUnitarioCentimos: bigint;
+  taxaIvaCentesimos: number;
   valorCentimos: bigint;
+  artigoInvgestId: string | null;
+  artigoCodigo: string | null;
   metodoPagamentoId: string;
   metodoPagamentoNome: string;
-  versao: number;
+  ordem: number;
 }): LinhaVista {
   return {
     id: linha.id,
     tipo: linha.tipo,
     descricao: linha.descricao,
+    quantidadeMil: linha.quantidadeMil,
+    precoUnitarioCentimos: Number(linha.precoUnitarioCentimos),
+    taxaIvaCentesimos: linha.taxaIvaCentesimos,
     valorCentimos: Number(linha.valorCentimos),
+    artigoInvgestId: linha.artigoInvgestId,
+    artigoCodigo: linha.artigoCodigo,
     metodoPagamentoId: linha.metodoPagamentoId,
     metodoPagamentoNome: linha.metodoPagamentoNome,
-    versao: linha.versao,
+    ordem: linha.ordem,
   };
 }
 
@@ -29,11 +44,61 @@ export const SELECT_LINHA = {
   id: true,
   tipo: true,
   descricao: true,
+  quantidadeMil: true,
+  precoUnitarioCentimos: true,
+  taxaIvaCentesimos: true,
   valorCentimos: true,
+  artigoInvgestId: true,
+  artigoCodigo: true,
   metodoPagamentoId: true,
   metodoPagamentoNome: true,
-  versao: true,
+  ordem: true,
 } as const;
+
+export const SELECT_REGISTO = {
+  id: true,
+  tipo: true,
+  clienteNome: true,
+  clienteNif: true,
+  clienteInvgestId: true,
+  facturaInvgestId: true,
+  facturaCodigo: true,
+  metodoPagamentoId: true,
+  metodoPagamentoNome: true,
+  nota: true,
+  versao: true,
+  linhas: { orderBy: { ordem: "asc" }, select: SELECT_LINHA },
+} as const;
+
+export function vistaRegisto(registo: {
+  id: string;
+  tipo: TipoLinha;
+  clienteNome: string | null;
+  clienteNif: string | null;
+  clienteInvgestId: string | null;
+  facturaInvgestId: string | null;
+  facturaCodigo: string | null;
+  metodoPagamentoId: string;
+  metodoPagamentoNome: string;
+  nota: string | null;
+  versao: number;
+  linhas: Parameters<typeof vistaLinha>[0][];
+}): RegistoVista {
+  return {
+    id: registo.id,
+    tipo: registo.tipo,
+    clienteNome: registo.clienteNome,
+    clienteNif: registo.clienteNif,
+    clienteInvgestId: registo.clienteInvgestId,
+    facturaInvgestId: registo.facturaInvgestId,
+    facturaCodigo: registo.facturaCodigo,
+    metodoPagamentoId: registo.metodoPagamentoId,
+    metodoPagamentoNome: registo.metodoPagamentoNome,
+    nota: registo.nota,
+    versao: registo.versao,
+    linhas: registo.linhas.map(vistaLinha),
+  };
+}
 
 /** One report with everything its screens, print and CSV show. */
 export async function carregarRelatorio(id: string) {
@@ -50,6 +115,10 @@ export async function carregarRelatorio(id: string) {
       userId: true,
       user: { select: { name: true, email: true } },
       finalizadoPor: { select: { name: true } },
+      registos: {
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        select: SELECT_REGISTO,
+      },
       linhas: { orderBy: { createdAt: "asc" }, select: SELECT_LINHA },
     },
   });
@@ -67,6 +136,8 @@ export async function carregarRelatorio(id: string) {
     autorId: relatorio.userId,
     autorNome: relatorio.user.name,
     autorEmail: relatorio.user.email,
+    registos: relatorio.registos.map(vistaRegisto),
+    /** Every line, flat and in entry order — what the totals and CSV read. */
     linhas: relatorio.linhas.map(vistaLinha),
   };
 }

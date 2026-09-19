@@ -34,8 +34,8 @@ export function ImportInvgestButton() {
       <div className="card-admin absolute right-0 z-30 mt-2 w-80 p-4 text-left">
         <p className="text-sm font-semibold text-a-text">Importar da INVGEST</p>
         <p className="mt-1 text-xs text-a-muted">
-          Traz artigos do catálogo de faturação para produtos locais. Artigos já importados são
-          atualizados.
+          Traz artigos do catálogo de faturação para produtos locais, com o preço já com IVA.
+          Artigos já importados são atualizados.
         </p>
 
         <form action={action} className="mt-3 space-y-2.5">
