@@ -20,11 +20,17 @@ type InstantaneoRegisto = {
   facturaCodigo: string | null;
   metodoPagamentoNome: string;
   nota: string | null;
+  /** "5%" or "1 500,00 Kz"; absent from rows written before discounts existed. */
+  desconto?: string | null;
   total: number;
   linhas: {
     descricao: string;
     quantidadeMil: number;
     precoUnitarioCentimos: number;
+    /** As the record's; absent from older rows too. */
+    desconto?: string | null;
+    /** The line's share of the record's discount, already out of `valorCentimos`. */
+    descontoRegistoCentimos?: number;
     valorCentimos: number;
     artigoCodigo: string | null;
   }[];
@@ -88,17 +94,21 @@ function resumoRegisto(registo: InstantaneoRegisto): string {
   const partes = [ROTULO_TIPO[registo.tipo] ?? registo.tipo];
   if (registo.clienteNome) partes.push(registo.clienteNome);
   partes.push(`${registo.linhas.length} artigo(s)`);
+  if (registo.desconto) partes.push(`desconto no total ${registo.desconto}`);
   partes.push(formatCentimos(registo.total));
   partes.push(registo.metodoPagamentoNome);
   if (registo.facturaCodigo) partes.push(registo.facturaCodigo);
   return partes.join(" · ");
 }
 
-/** "2 × Luminária ST89 — 170 000,00 Kz". */
+/** "2 × Luminária ST89 (desconto 10%) — 153 000,00 Kz". */
 function resumoArtigo(linha: InstantaneoRegisto["linhas"][number]): string {
   const quantidade = quantidadeMilParaTexto(linha.quantidadeMil);
   const prefixo = quantidade === "1" ? "" : `${quantidade} × `;
-  return `${prefixo}${linha.descricao} — ${formatCentimos(linha.valorCentimos)}`;
+  const desconto = linha.desconto ? ` (desconto ${linha.desconto})` : "";
+  // As the bill shows it: the record's own discount is its own entry.
+  const valor = linha.valorCentimos + (linha.descontoRegistoCentimos ?? 0);
+  return `${prefixo}${linha.descricao}${desconto} — ${formatCentimos(valor)}`;
 }
 
 /** Only the fields that actually changed, each as "antes → depois". */
@@ -116,6 +126,7 @@ function diferencas(antes: InstantaneoRegisto, depois: InstantaneoRegisto): stri
   comparar("Documento", antes.facturaCodigo, depois.facturaCodigo);
   comparar("Método", antes.metodoPagamentoNome, depois.metodoPagamentoNome);
   comparar("Nota", antes.nota, depois.nota);
+  comparar("Desconto no total", antes.desconto ?? null, depois.desconto ?? null);
 
   const artigosAntes = antes.linhas.map(resumoArtigo);
   const artigosDepois = depois.linhas.map(resumoArtigo);

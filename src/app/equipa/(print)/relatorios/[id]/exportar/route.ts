@@ -2,12 +2,13 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import {
+  calcularLinha,
   centimosParaTexto,
+  descontoParaTexto,
   quantidadeMilParaTexto,
-  taxaIvaParaTexto,
 } from "@/lib/relatorios/dinheiro";
 import { formatDataHoraLuanda } from "@/lib/relatorios/dia";
-import { ROTULO_TIPO, calcularTotais } from "@/lib/relatorios/resumo";
+import { ROTULO_TIPO, calcularTotais, rotuloIvaDaLinha } from "@/lib/relatorios/resumo";
 import { carregarRelatorio } from "@/lib/relatorios/queries";
 import { podeVerRelatorio, resolverAcesso } from "@/lib/relatorios/acesso";
 
@@ -97,7 +98,12 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
       "Código do artigo",
       "Quantidade",
       "Preço unitário (Kz)",
+      "Desconto do artigo",
+      "Desconto do artigo (Kz)",
+      "Desconto no total",
+      "Desconto no total (Kz)",
       "IVA",
+      "IVA (Kz)",
       "Valor (Kz)",
       "Método de pagamento",
       "Nota",
@@ -114,7 +120,18 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
           textoSeguro(l.artigoCodigo ?? ""),
           quantidadeMilParaTexto(l.quantidadeMil),
           centimosParaTexto(l.precoUnitarioCentimos),
-          l.taxaIvaCentesimos > 0 ? taxaIvaParaTexto(l.taxaIvaCentesimos) : "",
+          // Each discount as it was given, then what it took off in money —
+          // the record's repeated on each of its rows, like the client, and
+          // with this row's share of it beside it, so the shares add up.
+          descontoParaTexto(l.desconto),
+          centimosParaTexto(l.descontoCentimos),
+          descontoParaTexto(registo.desconto),
+          centimosParaTexto(l.descontoRegistoCentimos),
+          // The rate as the line states it, then the tax in money — an
+          // accountant should not have to redo the arithmetic, least of all
+          // the rounding, to reconcile the day.
+          rotuloIvaDaLinha(l) ?? "",
+          centimosParaTexto(calcularLinha(l, l.descontoRegistoCentimos).iva),
           centimosParaTexto(l.valorCentimos),
           textoSeguro(registo.metodoPagamentoNome),
           textoSeguro(registo.nota ?? ""),
@@ -125,6 +142,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     linha("Total de vendas", centimosParaTexto(totais.vendas)),
     linha("Total de despesas", centimosParaTexto(totais.despesas)),
     linha("Saldo", centimosParaTexto(totais.saldo)),
+    // Already taken off the totals above; listed so the day's discounts can
+    // be seen without summing a column.
+    linha("Descontos nas vendas (já deduzidos)", centimosParaTexto(totais.descontosVendas)),
+    linha("Descontos nas despesas (já deduzidos)", centimosParaTexto(totais.descontosDespesas)),
     "",
     linha("Método de pagamento", "Vendas (Kz)", "Despesas (Kz)", "Saldo (Kz)"),
     ...totais.porMetodo.map((m) =>

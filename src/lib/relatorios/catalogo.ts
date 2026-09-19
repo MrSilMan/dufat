@@ -1,7 +1,12 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
-import { MAX_TAXA_IVA } from "@/lib/relatorios/dinheiro";
+import {
+  calcularLinha,
+  MAX_DESCONTO_PERCENTAGEM,
+  MAX_TAXA_IVA,
+  type Desconto,
+} from "@/lib/relatorios/dinheiro";
 import {
   getInvoice,
   isInvgestEnabled,
@@ -87,6 +92,13 @@ export type ArtigoEncontrado = {
    * price ("preço sob consulta").
    */
   precoCentimos: number;
+  /**
+   * The rate that price already contains, in hundredths of a percent. INVGEST
+   * states each article's; a locally imported one does not keep it, so it is
+   * assumed standard — the price is right either way, only the base/IVA split
+   * would be, and the editor's toggle settles it.
+   */
+  taxaIvaCentesimos: number;
   unidade: string | null;
   invgestItemId: string | null;
   /** Where this match was found — shown as a badge, so nobody has to guess. */
@@ -129,6 +141,7 @@ async function artigosLocais(termo: string): Promise<ArtigoEncontrado[]> {
     descricao: produto.name,
     codigo: produto.invgestItemCode ?? produto.sku,
     precoCentimos: decimalParaCentimos(produto.priceKz),
+    taxaIvaCentesimos: TAXA_NORMAL,
     unidade: null,
     invgestItemId: produto.invgestItemId,
     origem: produto.invgestItemId ? "invgest" : "local",
@@ -161,6 +174,7 @@ export async function procurarArtigos(termo: string): Promise<ResultadoPesquisa<
           descricao: item.description,
           codigo: item.code ?? null,
           precoCentimos: kwanzasParaCentimos(precoComIva(item.unitPrice, item.taxRate)),
+          taxaIvaCentesimos: taxaParaCentesimos(item.taxRate),
           unidade: item.unit ?? null,
           invgestItemId: item.id,
           origem: "invgest",
@@ -300,8 +314,10 @@ export type LinhaDeFactura = {
   descricao: string;
   /** Thousandths of a unit, as the editor holds quantities. */
   quantidadeMil: number;
-  /** Taxable — see {@link precoUnitarioTributavel}. */
+  /** Taxable, before the line's discount — see {@link precoEDesconto}. */
   precoUnitarioCentimos: number;
+  /** The document's own discount on the line; null when it gave none. */
+  desconto: Desconto | null;
   /** Hundredths of a percent (1400 = 14%), added on top of the line's total. */
   taxaIvaCentesimos: number;
   artigoInvgestId: string | null;
@@ -334,7 +350,7 @@ export async function carregarFactura(id: string): Promise<FacturaCarregada | nu
         return {
           descricao: item.description,
           quantidadeMil,
-          precoUnitarioCentimos: precoUnitarioTributavel(item, quantidadeMil),
+          ...precoEDesconto(item, quantidadeMil),
           taxaIvaCentesimos: taxaParaCentesimos(item.taxRate),
           artigoInvgestId: item.itemId ?? null,
           artigoCodigo: item.itemCode ?? null,
@@ -345,26 +361,65 @@ export async function carregarFactura(id: string): Promise<FacturaCarregada | nu
 }
 
 /**
- * The taxable price of one unit, in cêntimos — what the document says.
+ * The taxable price of one unit, in cêntimos, and the discount the document
+ * gave on the line — what the document says, both of them.
  *
  * Kept taxable, with the rate carried alongside, because that is the only way
  * the record can land on the document's own total: INVGEST rounds the IVA once
  * per line, so 10 × 3 508,77 is 35 087,70 + 4 912,28 = 39 999,98, a figure no
  * gross unit price multiplies back to. The editor adds the IVA the same way.
  *
- * A discounted line is the exception. INVGEST's `net` is already the discount
- * applied, and there is nowhere in a quantity × price line to put the discount
- * itself, so the unit price becomes the discounted one — which can round by a
- * cêntimo when the discount does not divide evenly.
+ * INVGEST states a discount as a percentage, and `net` as what the line came to
+ * with it. The percentage is kept when it lands on that `net` exactly; where
+ * INVGEST rounded differently, the discount becomes the amount it took off, so
+ * the record still adds up to the document to the cêntimo.
  */
-function precoUnitarioTributavel(item: InvgestInvoiceItem, quantidadeMil: number): number {
-  const comDesconto = typeof item.discountPercent === "number" && item.discountPercent > 0;
-  const liquidoCentimos = kwanzasParaCentimos(item.net);
-  if (comDesconto && liquidoCentimos > 0 && quantidadeMil > 0) {
-    return Math.round((liquidoCentimos * 1000) / quantidadeMil);
+function precoEDesconto(
+  item: InvgestInvoiceItem,
+  quantidadeMil: number,
+): { precoUnitarioCentimos: number; desconto: Desconto | null } {
+  const precoUnitarioCentimos = kwanzasParaCentimos(item.unitPrice);
+  const liquido = kwanzasParaCentimos(item.net);
+
+  if (precoUnitarioCentimos <= 0) {
+    // No price to discount from: what the line came to is all there is.
+    return {
+      precoUnitarioCentimos:
+        liquido > 0 && quantidadeMil > 0 ? Math.round((liquido * 1000) / quantidadeMil) : 0,
+      desconto: null,
+    };
   }
-  return kwanzasParaCentimos(item.unitPrice);
+
+  const percentagem = item.discountPercent;
+  if (typeof percentagem !== "number" || !Number.isFinite(percentagem) || percentagem <= 0) {
+    return { precoUnitarioCentimos, desconto: null };
+  }
+
+  const semImposto = (desconto: Desconto | null) =>
+    calcularLinha({
+      quantidadeMil,
+      precoUnitarioCentimos,
+      taxaIvaCentesimos: 0,
+      precoIncluiIva: false,
+      desconto,
+    }).total;
+  const emPercentagem: Desconto = {
+    tipo: "PERCENTAGEM",
+    centesimos: Math.min(Math.round(percentagem * 100), MAX_DESCONTO_PERCENTAGEM),
+  };
+  if (liquido <= 0 || semImposto(emPercentagem) === liquido) {
+    return { precoUnitarioCentimos, desconto: emPercentagem };
+  }
+
+  const bruto = semImposto(null);
+  return {
+    precoUnitarioCentimos,
+    desconto: liquido < bruto ? { tipo: "VALOR", centimos: bruto - liquido } : null,
+  };
 }
+
+/** 14% — the standard Angolan rate, assumed where the catalog does not say. */
+const TAXA_NORMAL = 1400;
 
 /** A line's IVA rate in hundredths of a percent, as the editor holds it. */
 function taxaParaCentesimos(taxRate: number | null | undefined): number {

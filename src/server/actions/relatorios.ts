@@ -9,20 +9,33 @@ import { logger } from "@/lib/logger";
 import { recordAudit } from "@/lib/audit";
 import { assertAdminRole, requireSession, type Session } from "@/lib/auth";
 import {
+  calcularLinha,
+  calcularRegisto,
   formatCentimos,
+  mesmoDesconto,
+  parseDesconto,
   parseQuantidadeMil,
   parseValorCentimos,
-  totalDaLinha,
   MAX_CENTIMOS,
+  type Desconto,
+  type LinhaParaCalculo,
 } from "@/lib/relatorios/dinheiro";
 import { diaParaDate, hojeLuanda, isDia, rotuloDiaCurto, dateParaDia } from "@/lib/relatorios/dia";
 import {
   calcularTotais,
+  descontoDoRegisto,
+  rotuloDesconto,
   totalDoRegisto,
   type RegistoVista,
   type TipoLinha,
 } from "@/lib/relatorios/resumo";
-import { SELECT_LINHA, SELECT_REGISTO, vistaLinha, vistaRegisto } from "@/lib/relatorios/queries";
+import {
+  SELECT_LINHA,
+  SELECT_REGISTO,
+  colunasDoDesconto,
+  vistaLinha,
+  vistaRegisto,
+} from "@/lib/relatorios/queries";
 import { acessoRelatorios, podeVerRelatorio } from "@/lib/relatorios/acesso";
 import {
   abrirRelatorioSchema,
@@ -132,12 +145,20 @@ function instantaneo(registo: RegistoVista): Prisma.InputJsonObject {
     metodoPagamentoId: registo.metodoPagamentoId,
     metodoPagamentoNome: registo.metodoPagamentoNome,
     nota: registo.nota,
+    // As a person reads them — "10%", "1 500,00 Kz" — since that is all the
+    // history ever does with them.
+    desconto: registo.desconto ? rotuloDesconto(registo.desconto) : null,
+    descontoCentimos: descontoDoRegisto(registo),
     total: totalDoRegisto(registo),
     linhas: registo.linhas.map((linha) => ({
       descricao: linha.descricao,
       quantidadeMil: linha.quantidadeMil,
       precoUnitarioCentimos: linha.precoUnitarioCentimos,
       taxaIvaCentesimos: linha.taxaIvaCentesimos,
+      precoIncluiIva: linha.precoIncluiIva,
+      desconto: linha.desconto ? rotuloDesconto(linha.desconto) : null,
+      descontoCentimos: linha.descontoCentimos,
+      descontoRegistoCentimos: linha.descontoRegistoCentimos,
       valorCentimos: linha.valorCentimos,
       artigoCodigo: linha.artigoCodigo,
     })),
@@ -209,6 +230,7 @@ function mesmoConteudo(registo: RegistoVista, enviado: RegistoPreparado): boolea
     registo.facturaInvgestId === enviado.facturaInvgestId &&
     registo.facturaCodigo === enviado.facturaCodigo &&
     registo.nota === enviado.nota &&
+    mesmoDesconto(registo.desconto, enviado.desconto) &&
     registo.metodoPagamentoId === enviado.metodoPagamentoId &&
     registo.linhas.length === enviado.linhas.length &&
     registo.linhas.every((linha, indice) => {
@@ -219,6 +241,8 @@ function mesmoConteudo(registo: RegistoVista, enviado: RegistoPreparado): boolea
         linha.quantidadeMil === outra.quantidadeMil &&
         linha.precoUnitarioCentimos === outra.precoUnitarioCentimos &&
         linha.taxaIvaCentesimos === outra.taxaIvaCentesimos &&
+        linha.precoIncluiIva === outra.precoIncluiIva &&
+        mesmoDesconto(linha.desconto, outra.desconto) &&
         linha.artigoInvgestId === outra.artigoInvgestId &&
         linha.artigoCodigo === outra.artigoCodigo
       );
@@ -240,6 +264,7 @@ type RegistoPreparado = {
   facturaInvgestId: string | null;
   facturaCodigo: string | null;
   nota: string | null;
+  desconto: Desconto | null;
   metodoPagamentoId: string;
   linhas: {
     id: string;
@@ -247,15 +272,23 @@ type RegistoPreparado = {
     quantidadeMil: number;
     precoUnitarioCentimos: number;
     taxaIvaCentesimos: number;
+    precoIncluiIva: boolean;
+    desconto: Desconto | null;
+    /** Both of these, and the total, from `calcularRegisto` — see there. */
+    descontoCentimos: number;
+    descontoRegistoCentimos: number;
     valorCentimos: number;
     artigoInvgestId: string | null;
     artigoCodigo: string | null;
   }[];
 };
 
+const DESCONTO_INVALIDO = "Desconto inválido (ex.: 10% ou 1 500,00).";
+
 /**
- * Parses the quantities and prices the colaborador typed, with the same
- * functions the editor used to show the totals on screen.
+ * Parses the quantities, prices and discounts the colaborador typed, with the
+ * same functions the editor used to show the totals on screen, and prices the
+ * record the way the editor did.
  *
  * Errors are keyed per line (`linhas.<id>.<campo>`) so each message lands under
  * the input it is about, however the lines were reordered since.
@@ -264,7 +297,7 @@ function prepararRegisto(
   dados: z.output<typeof registoRelatorioSchema>,
 ): RegistoPreparado | FalhaRelatorio {
   const errors: Record<string, string[]> = {};
-  const linhas: RegistoPreparado["linhas"] = [];
+  const lidas: { linha: (typeof dados.linhas)[number]; calculo: LinhaParaCalculo }[] = [];
 
   const ids = new Set<string>();
   for (const linha of dados.linhas) {
@@ -275,6 +308,7 @@ function prepararRegisto(
 
     const quantidadeMil = parseQuantidadeMil(linha.quantidade);
     const precoUnitarioCentimos = parseValorCentimos(linha.precoUnitario);
+    const desconto = parseDesconto(linha.desconto);
 
     if (quantidadeMil === null) {
       errors[`linhas.${linha.id}.quantidade`] = ["Quantidade inválida (ex.: 2 ou 2,5)."];
@@ -282,34 +316,53 @@ function prepararRegisto(
     if (precoUnitarioCentimos === null || precoUnitarioCentimos <= 0) {
       errors[`linhas.${linha.id}.precoUnitario`] = ["Preço inválido (ex.: 1 500,00)."];
     }
-    if (quantidadeMil === null || precoUnitarioCentimos === null) continue;
-
-    const valorCentimos = totalDaLinha(quantidadeMil, precoUnitarioCentimos, linha.taxaIva);
-    if (valorCentimos <= 0 || valorCentimos > MAX_CENTIMOS) {
-      errors[`linhas.${linha.id}.precoUnitario`] = ["Total da linha fora dos limites."];
+    if (desconto === "invalido") {
+      errors[`linhas.${linha.id}.desconto`] = [DESCONTO_INVALIDO];
+    }
+    if (quantidadeMil === null || precoUnitarioCentimos === null || desconto === "invalido") {
       continue;
     }
 
-    linhas.push({
-      id: linha.id,
-      descricao: linha.descricao,
+    const calculo: LinhaParaCalculo = {
       quantidadeMil,
       precoUnitarioCentimos,
       taxaIvaCentesimos: linha.taxaIva,
-      valorCentimos,
-      artigoInvgestId: linha.artigoInvgestId,
-      artigoCodigo: linha.artigoCodigo,
-    });
+      precoIncluiIva: linha.precoIncluiIva,
+      desconto,
+    };
+    // Checked before the discount: an article has to be worth something for
+    // a discount to come off it. After one, down to nothing is allowed — an
+    // article given away is a discount of 100%.
+    const { bruto, semDesconto } = calcularLinha(calculo);
+    if (semDesconto <= 0 || semDesconto > MAX_CENTIMOS) {
+      errors[`linhas.${linha.id}.precoUnitario`] = ["Total da linha fora dos limites."];
+      continue;
+    }
+    if (desconto?.tipo === "VALOR" && desconto.centimos > bruto) {
+      errors[`linhas.${linha.id}.desconto`] = ["O desconto é maior do que o valor do artigo."];
+      continue;
+    }
+    lidas.push({ linha, calculo });
   }
 
-  if (Object.keys(errors).length > 0) {
+  const desconto = parseDesconto(dados.desconto);
+  if (desconto === "invalido") errors.desconto = [DESCONTO_INVALIDO];
+
+  if (Object.keys(errors).length > 0 || desconto === "invalido") {
     return { ok: false, codigo: "VALIDACAO", message: "Verifique os campos assinalados.", errors };
   }
 
-  const total = linhas.reduce((soma, linha) => soma + linha.valorCentimos, 0);
-  if (total > MAX_CENTIMOS) {
+  const calculado = calcularRegisto(
+    lidas.map(({ calculo }) => calculo),
+    desconto,
+  );
+  if (calculado.subtotal > MAX_CENTIMOS) {
     const message = "O total do registo excede o limite.";
     return { ok: false, codigo: "VALIDACAO", message, errors: { linhas: [message] } };
+  }
+  if (desconto?.tipo === "VALOR" && desconto.centimos > calculado.subtotal) {
+    const message = "O desconto é maior do que o total do registo.";
+    return { ok: false, codigo: "VALIDACAO", message, errors: { desconto: [message] } };
   }
 
   return {
@@ -323,8 +376,25 @@ function prepararRegisto(
     facturaInvgestId: dados.facturaInvgestId,
     facturaCodigo: dados.facturaCodigo,
     nota: dados.nota,
+    desconto,
     metodoPagamentoId: dados.metodoPagamentoId,
-    linhas,
+    linhas: lidas.map(({ linha, calculo }, indice) => {
+      const precos = calculado.linhas[indice]!;
+      return {
+        id: linha.id,
+        descricao: linha.descricao,
+        quantidadeMil: calculo.quantidadeMil,
+        precoUnitarioCentimos: calculo.precoUnitarioCentimos,
+        taxaIvaCentesimos: calculo.taxaIvaCentesimos,
+        precoIncluiIva: calculo.precoIncluiIva,
+        desconto: calculo.desconto,
+        descontoCentimos: precos.descontoLinha,
+        descontoRegistoCentimos: precos.descontoRegisto,
+        valorCentimos: precos.total,
+        artigoInvgestId: linha.artigoInvgestId,
+        artigoCodigo: linha.artigoCodigo,
+      };
+    }),
   };
 }
 
@@ -396,6 +466,10 @@ function linhasParaEscrever(
     quantidadeMil: linha.quantidadeMil,
     precoUnitarioCentimos: BigInt(linha.precoUnitarioCentimos),
     taxaIvaCentesimos: linha.taxaIvaCentesimos,
+    precoIncluiIva: linha.precoIncluiIva,
+    ...colunasDoDesconto(linha.desconto),
+    descontoCentimos: BigInt(linha.descontoCentimos),
+    descontoRegistoCentimos: BigInt(linha.descontoRegistoCentimos),
     valorCentimos: BigInt(linha.valorCentimos),
     artigoInvgestId: linha.artigoInvgestId,
     artigoCodigo: linha.artigoCodigo,
@@ -449,6 +523,7 @@ async function escreverRegisto(
         facturaInvgestId: dados.facturaInvgestId,
         facturaCodigo: dados.facturaCodigo,
         nota: dados.nota,
+        ...colunasDoDesconto(dados.desconto),
         metodoPagamentoId: dados.metodoPagamentoId,
         metodoPagamentoNome: metodo.nome,
       },
@@ -508,6 +583,7 @@ async function escreverRegisto(
       facturaInvgestId: dados.facturaInvgestId,
       facturaCodigo: dados.facturaCodigo,
       nota: dados.nota,
+      ...colunasDoDesconto(dados.desconto),
       metodoPagamentoId: dados.metodoPagamentoId,
       metodoPagamentoNome,
       versao: { increment: 1 },

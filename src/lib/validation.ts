@@ -671,6 +671,18 @@ const idDoCliente = z
   .max(64)
   .regex(/^[A-Za-z0-9_-]+$/, "Identificador inválido");
 
+/**
+ * A discount as it was typed — "10%" or an amount — and parsed on the server
+ * with the editor's own function, like the price. Absent is no discount, which
+ * is what every record written before discounts existed had.
+ */
+const descontoTexto = z
+  .string()
+  .trim()
+  .max(32, "Desconto demasiado longo")
+  .nullish()
+  .transform((valor) => valor ?? "");
+
 /** Optional free text that arrives as "" from an untouched input. */
 const textoOpcional = (max: number, mensagem: string) =>
   z
@@ -694,11 +706,17 @@ export const linhaRegistoSchema = z.object({
     .max(200, "Descrição demasiado longa (máx. 200 caracteres)"),
   quantidade: z.string().trim().min(1, "Indique a quantidade"),
   precoUnitario: z.string().trim().min(1, "Indique o preço"),
-  /**
-   * IVA in hundredths of a percent, carried (not typed) by a line filled in
-   * from an INVGEST document. Absent — every line typed by hand — means 0.
-   */
+  /** IVA in hundredths of a percent; 0 is exempt. Absent means exempt too. */
   taxaIva: z.number().int().min(0).max(MAX_TAXA_IVA).catch(0).default(0),
+  /**
+   * Whether the price above already contains that IVA. True for a line typed
+   * at the till, where the price is what was paid; false for one filled in
+   * from an INVGEST document, which states a taxable price with the tax on
+   * top. Absent means false, which is what every line written before the
+   * choice existed meant.
+   */
+  precoIncluiIva: z.boolean().catch(false).default(false),
+  desconto: descontoTexto,
   /** Set when the line was picked from the catalog rather than typed. */
   artigoInvgestId: textoOpcional(64, "Artigo inválido"),
   artigoCodigo: textoOpcional(64, "Código de artigo inválido"),
@@ -724,6 +742,8 @@ export const registoRelatorioSchema = z.object({
   facturaInvgestId: textoOpcional(64, "Documento inválido"),
   facturaCodigo: textoOpcional(64, "Número de documento inválido"),
   nota: textoOpcional(300, "Nota demasiado longa (máx. 300 caracteres)"),
+  /** On the whole bill, typed like an article's. */
+  desconto: descontoTexto,
   metodoPagamentoId: z.string().min(1, "Escolha o método de pagamento"),
   linhas: z
     .array(linhaRegistoSchema)

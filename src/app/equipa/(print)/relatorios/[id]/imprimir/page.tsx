@@ -3,17 +3,18 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { requireSession } from "@/lib/auth";
 import { getSiteSettings } from "@/lib/settings";
-import {
-  formatCentimosNumero,
-  quantidadeMilParaTexto,
-  taxaIvaParaTexto,
-} from "@/lib/relatorios/dinheiro";
+import { formatCentimosNumero, quantidadeMilParaTexto } from "@/lib/relatorios/dinheiro";
 import { formatDataHoraLuanda, rotuloDia } from "@/lib/relatorios/dia";
 import {
   ROTULO_CONTRAPARTE,
   ROTULO_TIPO,
   calcularTotais,
+  descontoDoRegisto,
+  rotuloDescontoDaLinha,
+  rotuloDescontoDoRegisto,
+  rotuloIvaDaLinha,
   totalDoRegisto,
+  valorDaLinha,
   type RegistoVista,
 } from "@/lib/relatorios/resumo";
 import { carregarRelatorio } from "@/lib/relatorios/queries";
@@ -107,6 +108,24 @@ export default async function ImprimirRelatorioPage({
                   <strong>{formatCentimosNumero(totais.saldo)} Kz</strong>
                 </td>
               </tr>
+              {/* Already taken off the totals above: a figure to read, not to
+                  subtract again, so it sits under the balance, set apart. */}
+              {totais.descontosVendas > 0 && (
+                <tr>
+                  <td className="text-ink-soft">Descontos nas vendas (já deduzidos)</td>
+                  <td className="num text-ink-soft">
+                    {formatCentimosNumero(totais.descontosVendas)} Kz
+                  </td>
+                </tr>
+              )}
+              {totais.descontosDespesas > 0 && (
+                <tr>
+                  <td className="text-ink-soft">Descontos nas despesas (já deduzidos)</td>
+                  <td className="num text-ink-soft">
+                    {formatCentimosNumero(totais.descontosDespesas)} Kz
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </section>
@@ -182,65 +201,78 @@ function Seccao({
             </tr>
           </thead>
           <tbody>
-            {registos.map((registo, indice) => (
-              // Each record is a group of rows: its heading, its articles, and
-              // — when there is more than one — its own subtotal.
-              <Fragment key={registo.id}>
-                <tr>
-                  <td colSpan={4} className="pt-2">
-                    <strong>
-                      #{indice + 1} ·{" "}
-                      {registo.clienteNome ??
-                        `Sem ${ROTULO_CONTRAPARTE[registo.tipo].toLowerCase()}`}
-                    </strong>
-                    <span className="text-ink-soft">
-                      {" "}
-                      · {registo.metodoPagamentoNome}
-                      {registo.clienteNif ? ` · NIF ${registo.clienteNif}` : ""}
-                      {registo.facturaCodigo ? ` · ${registo.facturaCodigo}` : ""}
-                    </span>
-                  </td>
-                </tr>
-                {registo.linhas.map((linha) => (
-                  <tr key={linha.id}>
-                    <td>
-                      {linha.descricao}
-                      {linha.artigoCodigo ? (
-                        <span className="text-ink-soft"> ({linha.artigoCodigo})</span>
-                      ) : null}
-                    </td>
-                    <td className="num">{quantidadeMilParaTexto(linha.quantidadeMil)}</td>
-                    {/* A taxable price says so, or the row would not multiply
-                        out to its own total. */}
-                    <td className="num">
-                      {formatCentimosNumero(linha.precoUnitarioCentimos)}
-                      {linha.taxaIvaCentesimos > 0 ? (
-                        <span className="text-ink-soft">
-                          {" "}
-                          + IVA {taxaIvaParaTexto(linha.taxaIvaCentesimos)}
-                        </span>
-                      ) : null}
-                    </td>
-                    <td className="num">{formatCentimosNumero(linha.valorCentimos)}</td>
-                  </tr>
-                ))}
-                {registo.linhas.length > 1 && (
+            {registos.map((registo, indice) => {
+              const desconto = descontoDoRegisto(registo);
+              // Each record is a group of rows: its heading, its articles, its
+              // discount if it had one, and — when there is more than one
+              // figure to add up — its own total.
+              return (
+                <Fragment key={registo.id}>
                   <tr>
-                    <td colSpan={3} className="text-ink-soft">
-                      Subtotal do registo #{indice + 1}
+                    <td colSpan={4} className="pt-2">
+                      <strong>
+                        #{indice + 1} ·{" "}
+                        {registo.clienteNome ??
+                          `Sem ${ROTULO_CONTRAPARTE[registo.tipo].toLowerCase()}`}
+                      </strong>
+                      <span className="text-ink-soft">
+                        {" "}
+                        · {registo.metodoPagamentoNome}
+                        {registo.clienteNif ? ` · NIF ${registo.clienteNif}` : ""}
+                        {registo.facturaCodigo ? ` · ${registo.facturaCodigo}` : ""}
+                      </span>
                     </td>
-                    <td className="num">{formatCentimosNumero(totalDoRegisto(registo))}</td>
                   </tr>
-                )}
-                {registo.nota && (
-                  <tr>
-                    <td colSpan={4} className="text-ink-soft">
-                      Nota: {registo.nota}
-                    </td>
-                  </tr>
-                )}
-              </Fragment>
-            ))}
+                  {registo.linhas.map((linha) => (
+                    <tr key={linha.id}>
+                      <td>
+                        {linha.descricao}
+                        {linha.artigoCodigo ? (
+                          <span className="text-ink-soft"> ({linha.artigoCodigo})</span>
+                        ) : null}
+                        {rotuloDescontoDaLinha(linha) ? (
+                          <span className="text-ink-soft"> — {rotuloDescontoDaLinha(linha)}</span>
+                        ) : null}
+                      </td>
+                      <td className="num">{quantidadeMilParaTexto(linha.quantidadeMil)}</td>
+                      {/* A taxable price says so, or the row would not multiply
+                          out to its own total; an inclusive one says so too, or
+                          the tax would look absent rather than contained. */}
+                      <td className="num">
+                        {formatCentimosNumero(linha.precoUnitarioCentimos)}
+                        {rotuloIvaDaLinha(linha) ? (
+                          <span className="text-ink-soft"> {rotuloIvaDaLinha(linha)}</span>
+                        ) : null}
+                      </td>
+                      <td className="num">{formatCentimosNumero(valorDaLinha(linha))}</td>
+                    </tr>
+                  ))}
+                  {desconto > 0 && (
+                    <tr>
+                      <td colSpan={3} className="text-ink-soft">
+                        {rotuloDescontoDoRegisto(registo)}
+                      </td>
+                      <td className="num">−{formatCentimosNumero(desconto)}</td>
+                    </tr>
+                  )}
+                  {(registo.linhas.length > 1 || desconto > 0) && (
+                    <tr>
+                      <td colSpan={3} className="text-ink-soft">
+                        {desconto > 0 ? "Total" : "Subtotal"} do registo #{indice + 1}
+                      </td>
+                      <td className="num">{formatCentimosNumero(totalDoRegisto(registo))}</td>
+                    </tr>
+                  )}
+                  {registo.nota && (
+                    <tr>
+                      <td colSpan={4} className="text-ink-soft">
+                        Nota: {registo.nota}
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
             <tr>
               <td colSpan={3}>
                 <strong>Total de {ROTULO_TIPO[registos[0]!.tipo].toLowerCase()}s</strong>

@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { cn } from "@/lib/cn";
 import { AdminField, adminInputClass } from "@/components/admin/ui";
 import { IconPlus } from "@/components/admin/icons";
@@ -7,14 +8,14 @@ import { CampoPesquisa } from "@/components/relatorios/CampoPesquisa";
 import {
   formatCentimos,
   formatCentimosNumero,
-  parseQuantidadeMil,
-  parseValorCentimos,
+  parseDesconto,
   taxaIvaParaTexto,
-  totalDaLinha,
+  type LinhaCalculada,
 } from "@/lib/relatorios/dinheiro";
 import { ROTULO_CONTRAPARTE, ROTULO_TIPO, type TipoLinha } from "@/lib/relatorios/resumo";
 import { pesquisarArtigos, pesquisarClientes } from "@/server/actions/relatorios-catalogo";
 import type { ArtigoEncontrado, ClienteEncontrado } from "@/lib/relatorios/catalogo";
+import { TAXA_NORMAL, calcularEmEdicao } from "./tiposEditor";
 import type { CamposLinha, CamposRegisto, EstadoRegisto, Metodo, Registo } from "./tiposEditor";
 
 const TIPOS: TipoLinha[] = ["VENDA", "DESPESA"];
@@ -33,21 +34,293 @@ const ROTULO_ESTADO: Record<EstadoRegisto, { texto: string; cor: string }> = {
   conflito: { texto: "Conflito", cor: "text-amber-600" },
 };
 
-/** The line's own total, IVA included — "—" while either field is unreadable. */
-function totalDaLinhaTexto(linha: CamposLinha): string {
-  const quantidade = parseQuantidadeMil(linha.quantidade);
-  const preco = parseValorCentimos(linha.precoUnitario);
-  if (quantidade === null || preco === null) return "—";
-  return formatCentimosNumero(totalDaLinha(quantidade, preco, linha.taxaIva));
+/**
+ * Whether the line came from an INVGEST document: a taxable price with the
+ * document's own rate waiting to go on top of it. Everything else — typed by
+ * hand, or picked from the catalog — is priced as paid, tax inside.
+ */
+function deDocumento(linha: CamposLinha): boolean {
+  return linha.taxaIva > 0 && !linha.precoIncluiIva;
 }
 
+/**
+ * Whether the price someone typed carries IVA or not, asked once per article.
+ *
+ * Neither side changes the line's total: the price typed is the price paid
+ * either way. What it settles is how the report breaks that price up — how
+ * much of the day's takings the relatório reports as tax.
+ */
+function EscolhaIva({
+  linha,
+  bloqueado,
+  onEscolher,
+}: {
+  linha: CamposLinha;
+  bloqueado: boolean;
+  onEscolher: (taxaIva: number) => void;
+}) {
+  const opcoes: { taxa: number; rotulo: string }[] = [
+    { taxa: TAXA_NORMAL, rotulo: `IVA ${taxaIvaParaTexto(TAXA_NORMAL)}` },
+    { taxa: 0, rotulo: "Isento" },
+  ];
+
+  return (
+    <div
+      role="group"
+      aria-label="IVA deste artigo"
+      className="mt-1.5 flex justify-end gap-1"
+    >
+      {opcoes.map((opcao) => {
+        const activa = linha.taxaIva === opcao.taxa;
+        return (
+          <button
+            key={opcao.taxa}
+            type="button"
+            disabled={bloqueado}
+            aria-pressed={activa}
+            onClick={() => onEscolher(opcao.taxa)}
+            className={cn(
+              "rounded-full px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-40",
+              activa
+                ? "bg-a-accent/15 text-a-accent ring-1 ring-a-accent/30"
+                : "text-a-faint hover:bg-a-surface-2 hover:text-a-text",
+            )}
+          >
+            {opcao.rotulo}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** What the record comes to on screen: its lines, both discounts taken. */
 export function totalDoRegistoEmEdicao(campos: CamposRegisto): number {
-  return campos.linhas.reduce((soma, linha) => {
-    const quantidade = parseQuantidadeMil(linha.quantidade);
-    const preco = parseValorCentimos(linha.precoUnitario);
-    if (quantidade === null || preco === null) return soma;
-    return soma + totalDaLinha(quantidade, preco, linha.taxaIva);
-  }, 0);
+  return calcularEmEdicao(campos).registo.total;
+}
+
+/**
+ * What a discount field has to say about what is typed in it — the server's
+ * complaint first, then text that is not a discount, then one larger than what
+ * it comes off. Null when the discount is fine, or when there is none.
+ */
+function avisoDesconto(
+  texto: string,
+  limite: number | null,
+  erro: string | undefined,
+  maiorQue: string,
+): string | null {
+  if (erro) return erro;
+  const lido = parseDesconto(texto);
+  if (lido === "invalido") return "Escreva 10% ou um valor, ex.: 1 500,00";
+  if (lido?.tipo === "VALOR" && limite !== null && lido.centimos > limite) return maiorQue;
+  return null;
+}
+
+/** "+ Desconto" — how a discount field looks until someone wants one. */
+function AbrirDesconto({
+  rotulo,
+  bloqueado,
+  onAbrir,
+}: {
+  rotulo: string;
+  bloqueado: boolean;
+  onAbrir: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onAbrir}
+      disabled={bloqueado}
+      className="inline-flex min-h-9 items-center gap-1.5 text-xs font-medium text-a-muted transition-colors hover:text-a-text disabled:opacity-40"
+    >
+      <IconPlus className="h-3 w-3" />
+      {rotulo}
+    </button>
+  );
+}
+
+/** The ✕ that takes a discount off again. */
+function RemoverDesconto({
+  rotulo,
+  bloqueado,
+  onRemover,
+}: {
+  rotulo: string;
+  bloqueado: boolean;
+  onRemover: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onRemover}
+      disabled={bloqueado}
+      title={`Remover ${rotulo}`}
+      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-xs text-a-faint transition-colors hover:bg-a-hover hover:text-rose-500 disabled:opacity-40 sm:h-8 sm:w-8"
+    >
+      <span aria-hidden>✕</span>
+      <span className="sr-only">Remover {rotulo}</span>
+    </button>
+  );
+}
+
+/**
+ * Shared by both discount inputs: compact, figures right-aligned like the
+ * price, and still a 44px target on a phone, where this gets tapped.
+ */
+const campoDescontoClass =
+  "w-32 min-h-11 px-3 py-2 text-right font-mono tabular-nums sm:min-h-9";
+
+/**
+ * An article's discount, typed either way — "10%" or an amount — with what it
+ * came to written beside it, so "1.500" read as 1 500,00 Kz is seen to be read
+ * that way before it is saved.
+ */
+function DescontoDoArtigo({
+  id,
+  valor,
+  precos,
+  comIva,
+  erro,
+  bloqueado,
+  onEscrever,
+  onBlur,
+  onRemover,
+}: {
+  id: string;
+  valor: string;
+  /** The line priced, or undefined while its quantity or price does not read. */
+  precos: LinhaCalculada | undefined;
+  /** The price is taxable, so the discount took the IVA on it along. */
+  comIva: boolean;
+  erro: string | undefined;
+  bloqueado: boolean;
+  onEscrever: (texto: string) => void;
+  onBlur: () => void;
+  onRemover: () => void;
+}) {
+  const aviso = avisoDesconto(
+    valor,
+    precos?.bruto ?? null,
+    erro,
+    "Maior do que o valor do artigo",
+  );
+  const lido = parseDesconto(valor);
+
+  return (
+    <div className="mt-2.5 flex flex-wrap items-center gap-x-2.5 gap-y-1">
+      <label htmlFor={id} className="text-xs font-medium text-a-muted">
+        Desconto
+      </label>
+      <input
+        id={id}
+        value={valor}
+        maxLength={32}
+        autoComplete="off"
+        disabled={bloqueado}
+        onChange={(evento) => onEscrever(evento.target.value)}
+        onBlur={onBlur}
+        aria-invalid={aviso ? true : undefined}
+        aria-describedby={`${id}-ajuda`}
+        className={cn(adminInputClass, campoDescontoClass, aviso && "border-rose-500/60")}
+        placeholder="10% ou 500"
+      />
+      <span
+        id={`${id}-ajuda`}
+        className={cn(
+          "text-xs",
+          aviso ? "text-rose-500" : "font-mono tabular-nums text-a-muted",
+        )}
+      >
+        {aviso ??
+          (lido && precos
+            ? `−${formatCentimos(precos.descontoLinha)}${comIva ? " com IVA" : ""}`
+            : null)}
+      </span>
+      <RemoverDesconto rotulo="o desconto do artigo" bloqueado={bloqueado} onRemover={onRemover} />
+    </div>
+  );
+}
+
+/**
+ * The bill, once it has a discount: what the articles came to, the discount on
+ * the whole of it, and what was paid. Without a discount there is nothing here
+ * the card's header does not already say.
+ */
+function ContaDoRegisto({
+  id,
+  valor,
+  subtotal,
+  desconto,
+  total,
+  erro,
+  bloqueado,
+  onEscrever,
+  onBlur,
+  onRemover,
+}: {
+  id: string;
+  valor: string;
+  subtotal: number;
+  desconto: number;
+  total: number;
+  erro: string | undefined;
+  bloqueado: boolean;
+  onEscrever: (texto: string) => void;
+  onBlur: () => void;
+  onRemover: () => void;
+}) {
+  const aviso = avisoDesconto(valor, subtotal, erro, "Maior do que o total do registo");
+  const lido = parseDesconto(valor);
+
+  return (
+    <div className="grid w-full grid-cols-[1fr_auto] items-center gap-x-4 gap-y-1.5 rounded-xl border border-a-line bg-a-surface-2/40 px-3.5 py-3 text-sm sm:ml-auto sm:w-auto sm:min-w-[22rem]">
+      <span className="text-a-muted">Subtotal</span>
+      <span className="text-right font-mono tabular-nums text-a-text">
+        {formatCentimos(subtotal)}
+      </span>
+
+      <label htmlFor={id} className="text-a-muted">
+        Desconto no total
+      </label>
+      <span className="flex items-center justify-end gap-1">
+        <input
+          id={id}
+          value={valor}
+          maxLength={32}
+          autoComplete="off"
+          disabled={bloqueado}
+          onChange={(evento) => onEscrever(evento.target.value)}
+          onBlur={onBlur}
+          aria-invalid={aviso ? true : undefined}
+          aria-describedby={`${id}-ajuda`}
+          className={cn(adminInputClass, campoDescontoClass, aviso && "border-rose-500/60")}
+          placeholder="10% ou 500"
+        />
+        <RemoverDesconto
+          rotulo="o desconto no total"
+          bloqueado={bloqueado}
+          onRemover={onRemover}
+        />
+      </span>
+      {(aviso || lido) && (
+        <span
+          id={`${id}-ajuda`}
+          className={cn(
+            "col-span-2 text-right text-xs",
+            aviso ? "text-rose-500" : "font-mono tabular-nums text-a-muted",
+          )}
+        >
+          {aviso ?? `−${formatCentimos(desconto)}`}
+        </span>
+      )}
+
+      <span className="mt-1 border-t border-a-line pt-2 font-semibold text-a-text">Total</span>
+      <span className="mt-1 border-t border-a-line pt-2 text-right font-mono font-semibold tabular-nums text-a-text">
+        {formatCentimos(total)}
+      </span>
+    </div>
+  );
 }
 
 type Props = {
@@ -105,7 +378,25 @@ export function RegistoEditor({
   const rotulo = ROTULO_ESTADO[estado];
   const venda = campos.tipo === "VENDA";
   const metodoRetirado = campos.metodoPagamentoId !== "" && !nomes.has(campos.metodoPagamentoId);
-  const total = totalDoRegistoEmEdicao(campos);
+  const calculo = calcularEmEdicao(campos);
+  const total = calculo.registo.total;
+
+  // Discount fields someone opened and has not typed in yet. One with a value
+  // stays open on its own; an empty one folds back into its link on blur.
+  const [descontosAbertos, setDescontosAbertos] = useState<ReadonlySet<string>>(new Set());
+  const [contaAberta, setContaAberta] = useState(false);
+  const descontoVisivel = (linha: CamposLinha) =>
+    linha.desconto !== "" || descontosAbertos.has(linha.id);
+  const contaVisivel = campos.desconto !== "" || contaAberta;
+  const alternarDesconto = (linhaId: string, aberto: boolean) =>
+    setDescontosAbertos((atuais) => {
+      const proximos = new Set(atuais);
+      if (aberto) proximos.add(linhaId);
+      else proximos.delete(linhaId);
+      return proximos;
+    });
+  const focar = (id: string) =>
+    requestAnimationFrame(() => document.getElementById(id)?.focus());
   const erroLinha = (linhaId: string, campo: string) =>
     registo.errors?.[`linhas.${linhaId}.${campo}`];
   const metodoNome =
@@ -415,12 +706,14 @@ export function RegistoEditor({
                               artigoCodigo: artigo.codigo ?? "",
                               // A catalog article with no price keeps whatever
                               // was typed: 0,00 is not a price, it is a gap.
-                              // A catalog price already includes IVA, so taking
-                              // one drops the rate a document line came with.
+                              // A catalog price is the price paid, tax inside,
+                              // which is the opposite of how a document line
+                              // arrived — so the rate moves inside the price.
                               ...(artigo.precoCentimos > 0
                                 ? {
                                     precoUnitario: centimosParaCampo(artigo.precoCentimos),
-                                    taxaIva: 0,
+                                    taxaIva: artigo.taxaIvaCentesimos,
+                                    precoIncluiIva: true,
                                   }
                                 : {}),
                             },
@@ -472,7 +765,9 @@ export function RegistoEditor({
                     </AdminField>
 
                     <AdminField
-                      label={linha.taxaIva > 0 ? "Preço unit. s/ IVA" : "Preço unit. (Kz)"}
+                      label={
+                        deDocumento(linha) ? "Preço unit. s/ IVA" : "Preço unit. (Kz)"
+                      }
                       htmlFor={`preco-${linha.id}`}
                       errors={erroLinha(linha.id, "precoUnitario")}
                     >
@@ -491,10 +786,23 @@ export function RegistoEditor({
                         className={cn(adminInputClass, "text-right font-mono tabular-nums")}
                         placeholder="0,00"
                       />
-                      {linha.taxaIva > 0 && (
+                      {deDocumento(linha) ? (
+                        // A document states a taxable price and its own rate;
+                        // neither is ours to reinterpret, so it is shown, not
+                        // offered.
                         <p className="mt-1.5 text-right text-xs text-a-faint">
-                          + IVA {taxaIvaParaTexto(linha.taxaIva)}
+                          + IVA {taxaIvaParaTexto(linha.taxaIva)} · do documento
                         </p>
+                      ) : (
+                        <EscolhaIva
+                          linha={linha}
+                          bloqueado={bloqueado}
+                          onEscolher={(taxaIva) =>
+                            // Both sides keep the price inclusive, so choosing
+                            // never moves the total — only how it is broken up.
+                            onEditarLinha(linha.id, { taxaIva, precoIncluiIva: true })
+                          }
+                        />
                       )}
                     </AdminField>
 
@@ -503,7 +811,14 @@ export function RegistoEditor({
                     <div className="col-span-2 flex items-center justify-between gap-3 lg:col-span-1 lg:flex-col lg:items-end lg:justify-start lg:gap-0">
                       <span className="text-sm font-medium text-a-text lg:mb-1.5">Total</span>
                       <span className="font-mono text-sm font-semibold tabular-nums text-a-text lg:flex lg:min-h-11 lg:min-w-24 lg:items-center lg:justify-end">
-                        {totalDaLinhaTexto(linha)}
+                        {/* After the article's own discount; the bill's is
+                          shown once, under the articles, as a bill does. */}
+                        {calculo.porId.has(linha.id)
+                          ? formatCentimosNumero(
+                              calculo.porId.get(linha.id)!.total +
+                                calculo.porId.get(linha.id)!.descontoRegisto,
+                            )
+                          : "—"}
                       </span>
                       <button
                         type="button"
@@ -526,19 +841,85 @@ export function RegistoEditor({
                       </button>
                     </div>
                   </div>
+
+                  {/* The article's own discount: a link until it is wanted —
+                    most sales have none, and an empty box under every
+                    article would be noise. */}
+                  {descontoVisivel(linha) ? (
+                    <DescontoDoArtigo
+                      id={`desconto-${linha.id}`}
+                      valor={linha.desconto}
+                      precos={calculo.porId.get(linha.id)}
+                      comIva={deDocumento(linha)}
+                      erro={erroLinha(linha.id, "desconto")?.[0]}
+                      bloqueado={bloqueado}
+                      onEscrever={(texto) => onEditarLinha(linha.id, { desconto: texto })}
+                      onBlur={() => {
+                        onBlur();
+                        if (!linha.desconto.trim()) alternarDesconto(linha.id, false);
+                      }}
+                      onRemover={() => {
+                        onEditarLinha(linha.id, { desconto: "" }, 0);
+                        alternarDesconto(linha.id, false);
+                      }}
+                    />
+                  ) : (
+                    <div className="mt-1">
+                      <AbrirDesconto
+                        rotulo="Desconto"
+                        bloqueado={bloqueado}
+                        onAbrir={() => {
+                          alternarDesconto(linha.id, true);
+                          focar(`desconto-${linha.id}`);
+                        }}
+                      />
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>
 
-            <button
-              type="button"
-              onClick={onAdicionarLinha}
-              disabled={bloqueado}
-              className="btn-admin-ghost min-h-10 w-full text-xs sm:w-auto"
-            >
-              <IconPlus className="h-3.5 w-3.5" />
-              Adicionar artigo
-            </button>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <button
+                type="button"
+                onClick={onAdicionarLinha}
+                disabled={bloqueado}
+                className="btn-admin-ghost min-h-10 w-full text-xs sm:w-auto"
+              >
+                <IconPlus className="h-3.5 w-3.5" />
+                Adicionar artigo
+              </button>
+
+              {contaVisivel ? (
+                <ContaDoRegisto
+                  id={`desconto-registo-${registo.id}`}
+                  valor={campos.desconto}
+                  subtotal={calculo.registo.subtotal}
+                  desconto={calculo.registo.desconto}
+                  total={calculo.registo.total}
+                  erro={registo.errors?.desconto?.[0]}
+                  bloqueado={bloqueado}
+                  onEscrever={(texto) => onEditar({ desconto: texto })}
+                  onBlur={() => {
+                    onBlur();
+                    if (!campos.desconto.trim()) setContaAberta(false);
+                  }}
+                  onRemover={() => {
+                    onEditar({ desconto: "" }, 0);
+                    setContaAberta(false);
+                  }}
+                />
+              ) : (
+                <AbrirDesconto
+                  rotulo="Desconto no total"
+                  bloqueado={bloqueado}
+                  onAbrir={() => {
+                    setContaAberta(true);
+                    focar(`desconto-registo-${registo.id}`);
+                  }}
+                />
+              )}
+            </div>
           </div>
 
           <details className="group">

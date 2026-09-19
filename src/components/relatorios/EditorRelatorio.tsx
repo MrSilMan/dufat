@@ -17,11 +17,9 @@ import {
 } from "@/server/actions/relatorios";
 import {
   centimosParaTexto,
+  descontoParaTexto,
   formatCentimos,
-  parseQuantidadeMil,
-  parseValorCentimos,
   quantidadeMilParaTexto,
-  totalDaLinha,
 } from "@/lib/relatorios/dinheiro";
 import {
   ROTULO_TIPO,
@@ -32,6 +30,7 @@ import {
 import type { FacturaCarregada } from "@/lib/relatorios/catalogo";
 import {
   TIPOS,
+  calcularEmEdicao,
   camposDe,
   completo,
   iguais,
@@ -133,14 +132,18 @@ function validarCampos(valor: unknown): CamposRegisto | null {
     ) {
       return null;
     }
-    // A backup written before lines carried an IVA rate has none: those lines
-    // were priced as paid, which is what a rate of 0 means.
+    // A backup written before lines carried an IVA rate has none, and one
+    // written before the inclusive/taxable choice existed priced its lines as
+    // paid — a rate of 0 either way, which is what those fields default to.
+    // One written before discounts existed had none.
     linhas.push({
       ...(l as CamposLinha),
       taxaIva: typeof l.taxaIva === "number" && l.taxaIva > 0 ? Math.round(l.taxaIva) : 0,
+      precoIncluiIva: l.precoIncluiIva === true,
+      desconto: eTexto(l.desconto) ? l.desconto : "",
     });
   }
-  return { ...(c as CamposRegisto), linhas };
+  return { ...(c as CamposRegisto), desconto: eTexto(c.desconto) ? c.desconto : "", linhas };
 }
 
 function lerPendentes(relatorioId: string): Record<string, Pendente> {
@@ -513,6 +516,7 @@ export function EditorRelatorio({
       facturaInvgestId: factura.invgestId,
       facturaCodigo: factura.codigo,
       nota: "",
+      desconto: "",
       metodoPagamentoId: metodos.length === 1 ? metodos[0]!.id : "",
       linhas: factura.linhas.map((linha) => ({
         id: novoId(),
@@ -520,6 +524,9 @@ export function EditorRelatorio({
         quantidade: quantidadeMilParaTexto(linha.quantidadeMil),
         precoUnitario: centimosParaTexto(linha.precoUnitarioCentimos),
         taxaIva: linha.taxaIvaCentesimos,
+        // A document states a taxable price; the tax goes on top of it.
+        precoIncluiIva: false,
+        desconto: descontoParaTexto(linha.desconto),
         artigoInvgestId: linha.artigoInvgestId ?? "",
         artigoCodigo: linha.artigoCodigo ?? "",
       })),
@@ -895,14 +902,14 @@ export function EditorRelatorio({
           ? registo.base.metodoPagamentoNome
           : (nomes.get(registo.campos.metodoPagamentoId) ?? "—");
 
-      return registo.campos.linhas.flatMap((linha) => {
-        const quantidade = parseQuantidadeMil(linha.quantidade);
-        const preco = parseValorCentimos(linha.precoUnitario);
-        if (quantidade === null || preco === null || preco <= 0) return [];
-        const valorCentimos = totalDaLinha(quantidade, preco, linha.taxaIva);
-        if (valorCentimos <= 0) return [];
-        return [{ tipo: registo.campos.tipo, valorCentimos, metodoPagamentoNome }];
-      });
+      return calcularEmEdicao(registo.campos).linhas.map(({ calculo, precos }) => ({
+        ...calculo,
+        tipo: registo.campos.tipo,
+        metodoPagamentoNome,
+        descontoCentimos: precos.descontoLinha,
+        descontoRegistoCentimos: precos.descontoRegisto,
+        valorCentimos: precos.total,
+      }));
     }),
   );
 

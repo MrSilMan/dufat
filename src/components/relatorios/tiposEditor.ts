@@ -1,10 +1,18 @@
 import {
+  calcularLinha,
+  calcularRegisto,
   centimosParaTexto,
+  descontoParaTexto,
+  mesmoDesconto,
+  parseDesconto,
   parseQuantidadeMil,
   parseValorCentimos,
   quantidadeMilParaTexto,
-  totalDaLinha,
   MAX_CENTIMOS,
+  type Desconto,
+  type LinhaCalculada,
+  type LinhaParaCalculo,
+  type RegistoCalculado,
 } from "@/lib/relatorios/dinheiro";
 import type { RegistoVista, TipoLinha } from "@/lib/relatorios/resumo";
 
@@ -28,11 +36,19 @@ export type CamposLinha = {
   quantidade: string;
   precoUnitario: string;
   /**
-   * IVA in hundredths of a percent (1400 = 14%). Not typed — a line filled in
-   * from an INVGEST document carries the document's rate, and a line written
-   * by hand keeps 0, its price being what was paid.
+   * IVA in hundredths of a percent (1400 = 14%); 0 is exempt. A line filled in
+   * from an INVGEST document carries the document's rate; one written by hand
+   * is toggled between the standard rate and exempt.
    */
   taxaIva: number;
+  /**
+   * Whether the price typed already contains that IVA. True for a line written
+   * by hand — the price is what was paid — and false for one from a document,
+   * which states a taxable price with the tax on top.
+   */
+  precoIncluiIva: boolean;
+  /** The discount as typed — "10%", "1 500" — or "" for none, the usual case. */
+  desconto: string;
   artigoInvgestId: string;
   artigoCodigo: string;
 };
@@ -45,6 +61,8 @@ export type CamposRegisto = {
   facturaInvgestId: string;
   facturaCodigo: string;
   nota: string;
+  /** The discount on the whole bill, typed like an article's. */
+  desconto: string;
   metodoPagamentoId: string;
   linhas: CamposLinha[];
 };
@@ -82,13 +100,21 @@ export function novoId(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** 14% — the standard Angolan rate, and what a new line starts on. */
+export const TAXA_NORMAL = 1400;
+
 export function linhaVazia(): CamposLinha {
   return {
     id: novoId(),
     descricao: "",
     quantidade: "1",
     precoUnitario: "",
-    taxaIva: 0,
+    // Most of what crosses the till is taxed, so a new line starts there; the
+    // price typed is the price paid, which is why the rate sits inside it and
+    // the total is the same either way the toggle is left.
+    taxaIva: TAXA_NORMAL,
+    precoIncluiIva: true,
+    desconto: "",
     artigoInvgestId: "",
     artigoCodigo: "",
   };
@@ -103,6 +129,7 @@ export function registoVazio(tipo: TipoLinha, metodoPagamentoId: string): Campos
     facturaInvgestId: "",
     facturaCodigo: "",
     nota: "",
+    desconto: "",
     metodoPagamentoId,
     linhas: [linhaVazia()],
   };
@@ -118,6 +145,7 @@ export function camposDe(registo: RegistoVista): CamposRegisto {
     facturaInvgestId: registo.facturaInvgestId ?? "",
     facturaCodigo: registo.facturaCodigo ?? "",
     nota: registo.nota ?? "",
+    desconto: descontoParaTexto(registo.desconto),
     metodoPagamentoId: registo.metodoPagamentoId,
     linhas: registo.linhas.map((linha) => ({
       id: linha.id,
@@ -125,10 +153,18 @@ export function camposDe(registo: RegistoVista): CamposRegisto {
       quantidade: quantidadeMilParaTexto(linha.quantidadeMil),
       precoUnitario: centimosParaTexto(linha.precoUnitarioCentimos),
       taxaIva: linha.taxaIvaCentesimos,
+      precoIncluiIva: linha.precoIncluiIva,
+      desconto: descontoParaTexto(linha.desconto),
       artigoInvgestId: linha.artigoInvgestId ?? "",
       artigoCodigo: linha.artigoCodigo ?? "",
     })),
   };
+}
+
+/** Whether a typed discount is the one saved — unreadable text never is. */
+function mesmoDescontoTexto(texto: string, guardado: Desconto | null): boolean {
+  const lido = parseDesconto(texto);
+  return lido !== "invalido" && mesmoDesconto(lido, guardado);
 }
 
 /**
@@ -148,6 +184,7 @@ export function iguais(campos: CamposRegisto, base: RegistoVista): boolean {
     opcional(campos.facturaInvgestId) !== base.facturaInvgestId ||
     opcional(campos.facturaCodigo) !== base.facturaCodigo ||
     opcional(campos.nota) !== base.nota ||
+    !mesmoDescontoTexto(campos.desconto, base.desconto) ||
     campos.metodoPagamentoId !== base.metodoPagamentoId ||
     campos.linhas.length !== base.linhas.length
   ) {
@@ -162,6 +199,8 @@ export function iguais(campos: CamposRegisto, base: RegistoVista): boolean {
       parseQuantidadeMil(linha.quantidade) === guardada.quantidadeMil &&
       parseValorCentimos(linha.precoUnitario) === guardada.precoUnitarioCentimos &&
       linha.taxaIva === guardada.taxaIvaCentesimos &&
+      linha.precoIncluiIva === guardada.precoIncluiIva &&
+      mesmoDescontoTexto(linha.desconto, guardada.desconto) &&
       opcional(linha.artigoInvgestId) === guardada.artigoInvgestId &&
       opcional(linha.artigoCodigo) === guardada.artigoCodigo
     );
@@ -173,27 +212,100 @@ export function vazio(campos: CamposRegisto): boolean {
   return (
     !campos.clienteNome.trim() &&
     !campos.nota.trim() &&
-    campos.linhas.every((linha) => !linha.descricao.trim() && !linha.precoUnitario.trim())
+    !campos.desconto.trim() &&
+    campos.linhas.every(
+      (linha) => !linha.descricao.trim() && !linha.precoUnitario.trim() && !linha.desconto.trim(),
+    )
   );
 }
 
-function linhaCompleta(linha: CamposLinha): boolean {
-  const quantidade = parseQuantidadeMil(linha.quantidade);
-  const preco = parseValorCentimos(linha.precoUnitario);
-  if (linha.descricao.trim().length < 2 || quantidade === null || preco === null || preco <= 0) {
-    return false;
+/**
+ * A line as the pricing reads it, or null while its quantity, price or
+ * discount does not read yet.
+ */
+function linhaParaCalculo(linha: CamposLinha): LinhaParaCalculo | null {
+  const quantidadeMil = parseQuantidadeMil(linha.quantidade);
+  const precoUnitarioCentimos = parseValorCentimos(linha.precoUnitario);
+  const desconto = parseDesconto(linha.desconto);
+  if (
+    quantidadeMil === null ||
+    precoUnitarioCentimos === null ||
+    precoUnitarioCentimos <= 0 ||
+    desconto === "invalido"
+  ) {
+    return null;
   }
-  const total = totalDaLinha(quantidade, preco, linha.taxaIva);
-  return total > 0 && total <= MAX_CENTIMOS;
+  return {
+    quantidadeMil,
+    precoUnitarioCentimos,
+    taxaIvaCentesimos: linha.taxaIva,
+    precoIncluiIva: linha.precoIncluiIva,
+    desconto,
+  };
 }
 
-/** Enough to be worth sending: every line readable, and a method chosen. */
+/**
+ * Enough to be worth sending: every line readable, its discount too and no
+ * larger than the article, the bill's discount no larger than the bill, and a
+ * method chosen. The server checks the same things, with the same functions.
+ */
 export function completo(campos: CamposRegisto): boolean {
-  return (
-    campos.metodoPagamentoId !== "" &&
-    campos.linhas.length > 0 &&
-    campos.linhas.every(linhaCompleta)
+  if (campos.metodoPagamentoId === "" || campos.linhas.length === 0) return false;
+
+  const linhas: LinhaParaCalculo[] = [];
+  for (const linha of campos.linhas) {
+    const calculo = linhaParaCalculo(linha);
+    if (!calculo || linha.descricao.trim().length < 2) return false;
+    const { bruto, semDesconto } = calcularLinha(calculo);
+    if (semDesconto <= 0 || semDesconto > MAX_CENTIMOS) return false;
+    if (calculo.desconto?.tipo === "VALOR" && calculo.desconto.centimos > bruto) return false;
+    linhas.push(calculo);
+  }
+
+  const desconto = parseDesconto(campos.desconto);
+  if (desconto === "invalido") return false;
+  const { subtotal } = calcularRegisto(linhas, desconto);
+  if (desconto?.tipo === "VALOR" && desconto.centimos > subtotal) return false;
+  return subtotal <= MAX_CENTIMOS;
+}
+
+/** One line of a record being edited, priced — only lines that read. */
+export type LinhaEmEdicao = {
+  id: string;
+  calculo: LinhaParaCalculo;
+  precos: LinhaCalculada;
+};
+
+/**
+ * The record as it stands on screen, priced the way the server will price it.
+ *
+ * Lines whose quantity or price does not read yet are left out of the sums,
+ * and a discount that does not read counts as none — each field says so on its
+ * own, and the running total should not jump about while someone types "1".
+ */
+export function calcularEmEdicao(campos: CamposRegisto): {
+  registo: RegistoCalculado;
+  linhas: LinhaEmEdicao[];
+  /** The same lines, by id, for the card's own columns. */
+  porId: Map<string, LinhaCalculada>;
+} {
+  const lidas = campos.linhas.flatMap((linha) => {
+    const calculo =
+      linhaParaCalculo(linha) ?? linhaParaCalculo({ ...linha, desconto: "" });
+    return calculo ? [{ id: linha.id, calculo }] : [];
+  });
+
+  const desconto = parseDesconto(campos.desconto);
+  const registo = calcularRegisto(
+    lidas.map(({ calculo }) => calculo),
+    desconto === "invalido" ? null : desconto,
   );
+  const linhas = lidas.map(({ id, calculo }, indice) => ({
+    id,
+    calculo,
+    precos: registo.linhas[indice]!,
+  }));
+  return { registo, linhas, porId: new Map(linhas.map((linha) => [linha.id, linha.precos])) };
 }
 
 /** What goes over the wire — `null` where the form holds "". */
@@ -207,6 +319,7 @@ export function paraEnviar(campos: CamposRegisto) {
     facturaInvgestId: opcional(campos.facturaInvgestId),
     facturaCodigo: opcional(campos.facturaCodigo),
     nota: opcional(campos.nota),
+    desconto: campos.desconto,
     metodoPagamentoId: campos.metodoPagamentoId,
     linhas: campos.linhas.map((linha) => ({
       id: linha.id,
@@ -214,6 +327,8 @@ export function paraEnviar(campos: CamposRegisto) {
       quantidade: linha.quantidade,
       precoUnitario: linha.precoUnitario,
       taxaIva: linha.taxaIva,
+      precoIncluiIva: linha.precoIncluiIva,
+      desconto: linha.desconto,
       artigoInvgestId: opcional(linha.artigoInvgestId),
       artigoCodigo: opcional(linha.artigoCodigo),
     })),

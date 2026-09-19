@@ -119,54 +119,296 @@ export function quantidadeMilParaTexto(mil: number): string {
 
 // ---------- IVA ----------
 //
-// A rate is held in hundredths of a percent: 14% is 1400. Only lines filled in
-// from an INVGEST document carry one — there the price is the taxable one and
-// the tax is added on top, exactly as the document does it. A line someone
-// typed carries 0: the price they wrote is already the price that was paid.
+// A rate is held in hundredths of a percent: 14% is 1400, and 0 is exempt.
+//
+// The rate alone does not say what it does to the price — `precoIncluiIva`
+// does. A line filled in from an INVGEST document states a taxable price and
+// the tax goes on top, exactly as the document does it. A line someone types
+// at the till states the price that was paid, tax already inside, and the
+// base and the tax are derived from it for the report.
 
 /** 100,00% — nothing real comes close, and it keeps the arithmetic bounded. */
 export const MAX_TAXA_IVA = 10_000;
 
-/** 1400 → "14%"; 1750 → "17,5%". */
-export function taxaIvaParaTexto(taxaIvaCentesimos: number): string {
-  const inteiro = Math.floor(taxaIvaCentesimos / 100);
-  const decimal = String(taxaIvaCentesimos % 100).padStart(2, "0").replace(/0+$/, "");
+/** Hundredths of a percent as a person writes them: 1400 → "14%"; 1750 → "17,5%". */
+export function percentagemParaTexto(centesimos: number): string {
+  const inteiro = Math.floor(centesimos / 100);
+  const decimal = String(centesimos % 100).padStart(2, "0").replace(/0+$/, "");
   return decimal ? `${inteiro},${decimal}%` : `${inteiro}%`;
 }
 
+/** 1400 → "14%"; 1750 → "17,5%". */
+export function taxaIvaParaTexto(taxaIvaCentesimos: number): string {
+  return percentagemParaTexto(taxaIvaCentesimos);
+}
+
 /**
- * quantidade × unit price (+ IVA, when the line carries a rate), in cêntimos.
+ * Splits a tax-inclusive total into its base and its IVA, in cêntimos.
+ *
+ * The total is what the customer actually paid, so it is the fixed quantity
+ * here: the base is rounded and the tax is whatever is left, which makes
+ * `base + imposto === total` exactly, for every total and every rate.
+ *
+ * This is not the inverse of the taxable case in `calcularLinha` and cannot
+ * be. That one rounds the tax up, as AGT requires when a document states a
+ * taxable price; going back the other way from a rounded gross cannot always
+ * land on a base whose rounded-up tax returns the same gross. A till line is
+ * not a document — the gross is the fact, and the split is derived from it.
+ */
+export function repartirIvaIncluido(
+  totalCentimos: number,
+  taxaIvaCentesimos: number,
+): { base: number; imposto: number } {
+  const taxa = Math.min(Math.max(Math.round(taxaIvaCentesimos), 0), MAX_TAXA_IVA);
+  if (taxa === 0 || totalCentimos === 0) return { base: totalCentimos, imposto: 0 };
+
+  const total = BigInt(totalCentimos);
+  const denominador = 10000n + BigInt(taxa);
+  const base = Number((total * 10000n + denominador / 2n) / denominador);
+  return { base, imposto: totalCentimos - base };
+}
+
+// ---------- Descontos ----------
+//
+// A discount is one optional field, typed either way: "10%" is a percentage,
+// anything else an amount in Kz. It comes off the price the way the line
+// states it — the price paid at the till, the taxable price on a document —
+// so the IVA is always worked out on what was actually charged, which is what
+// AGT requires of a discount given on the document itself.
+//
+// A record can also carry a discount on the whole bill. That one comes off the
+// total paid and is spread over the lines in proportion to what each came to,
+// so a sale mixing taxed and exempt articles still reports the IVA it carried.
+
+/** A discount as it was given: a share of the amount, or an amount off it. */
+export type Desconto =
+  | { tipo: "PERCENTAGEM"; /** Hundredths of a percent: 1000 is 10%. */ centesimos: number }
+  | { tipo: "VALOR"; /** Cêntimos off. */ centimos: number };
+
+/** 100% — an article given away is a discount too. */
+export const MAX_DESCONTO_PERCENTAGEM = 10_000;
+
+/**
+ * Reads a discount field.
+ *
+ * Empty is no discount — the ordinary case — and so is a zero. "10%", "12,5 %"
+ * and "0.5%" are percentages, with at most two decimals; anything else has to
+ * read as an amount, in the forms {@link parseValorCentimos} accepts. A leading
+ * minus is allowed and ignored: people write a discount as what comes off.
+ *
+ * Text that is neither comes back as "invalido" rather than as no discount. A
+ * typo in a discount has to be pointed out, not quietly charged at full price.
+ */
+export function parseDesconto(texto: string): Desconto | null | "invalido" {
+  const limpo = texto.replace(/[\s  ]/g, "").replace(/^[-−]/, "");
+  if (!limpo) return null;
+
+  if (limpo.endsWith("%")) {
+    const partes = /^(\d+)(?:[.,](\d{1,2}))?%$/.exec(limpo);
+    if (!partes) return "invalido";
+    const centesimos = Number(partes[1]) * 100 + Number((partes[2] ?? "").padEnd(2, "0"));
+    if (!Number.isSafeInteger(centesimos) || centesimos > MAX_DESCONTO_PERCENTAGEM) {
+      return "invalido";
+    }
+    return centesimos === 0 ? null : { tipo: "PERCENTAGEM", centesimos };
+  }
+
+  const centimos = parseValorCentimos(limpo);
+  if (centimos === null) return "invalido";
+  return centimos === 0 ? null : { tipo: "VALOR", centimos };
+}
+
+/** A discount back in the field's own words: "10%", "12,5%", "1500,00"; "" for none. */
+export function descontoParaTexto(desconto: Desconto | null): string {
+  if (!desconto) return "";
+  return desconto.tipo === "PERCENTAGEM"
+    ? percentagemParaTexto(desconto.centesimos)
+    : centimosParaTexto(desconto.centimos);
+}
+
+/** Whether two discounts are the same one; two absent ones are. */
+export function mesmoDesconto(a: Desconto | null, b: Desconto | null): boolean {
+  if (a === null || b === null) return a === b;
+  if (a.tipo === "PERCENTAGEM") return b.tipo === "PERCENTAGEM" && a.centesimos === b.centesimos;
+  return b.tipo === "VALOR" && a.centimos === b.centimos;
+}
+
+/**
+ * What a discount takes off an amount, in cêntimos — never more than the
+ * amount itself. A percentage rounds half-up to the cêntimo.
+ */
+function descontoSobre(desconto: Desconto | null, montante: bigint): bigint {
+  if (!desconto || montante <= 0n) return 0n;
+  if (desconto.tipo === "VALOR") {
+    const valor = BigInt(Math.max(Math.round(desconto.centimos), 0));
+    return valor < montante ? valor : montante;
+  }
+  const centesimos = BigInt(
+    Math.min(Math.max(Math.round(desconto.centesimos), 0), MAX_DESCONTO_PERCENTAGEM),
+  );
+  return (montante * centesimos + 5000n) / 10000n;
+}
+
+// ---------- Pricing a line and a record ----------
+
+/** What a line needs to be priced. */
+export type LinhaParaCalculo = {
+  quantidadeMil: number;
+  precoUnitarioCentimos: number;
+  taxaIvaCentesimos: number;
+  precoIncluiIva: boolean;
+  desconto: Desconto | null;
+};
+
+/**
+ * A line priced, every figure in cêntimos. They always add up:
+ * `semDesconto = total + descontoLinha + descontoRegisto`.
+ */
+export type LinhaCalculada = {
+  /** quantidade × unit price before any discount — taxable or as paid, as the price is. */
+  bruto: number;
+  /** What the line would come to with no discount at all, IVA included. */
+  semDesconto: number;
+  /** What the line's own discount took off that, the IVA it spared included. */
+  descontoLinha: number;
+  /** The line's share of its record's discount. */
+  descontoRegisto: number;
+  /** What the line comes to, IVA included and both discounts taken: what the totals add up. */
+  total: number;
+  /** How much of `total` is IVA. */
+  iva: number;
+};
+
+/** A cêntimo figure as a number; past 2^53 it is capped, and `MAX_CENTIMOS` checks refuse it. */
+function numero(valor: bigint): number {
+  const limite = BigInt(Number.MAX_SAFE_INTEGER);
+  return Number(valor > limite ? limite : valor);
+}
+
+/**
+ * Prices one line: quantidade × unit price, less the line's discount, plus the
+ * IVA when the rate is one that goes on top of the price, less the line's share
+ * of its record's discount.
  *
  * Exact arithmetic throughout: `2,5 × 85 000,00 Kz` is exactly 212 500,00 Kz,
  * not 212 499,999… The product of two in-range values can still leave 2^53, so
- * it is taken as a BigInt; a total that large comes back as an unsafe-looking
- * number that the caller's `MAX_CENTIMOS` check then refuses.
+ * it is taken as a BigInt.
  *
- * The two roundings are not the same, and that is deliberate.
+ * The roundings are not all the same, and that is deliberate.
  *
- * The taxable total rounds half-up, the ordinary arithmetic rounding.
+ * The product and a percentage discount round half-up, the ordinary rounding.
  *
- * The tax is rounded **up to the next cêntimo**, once, on the line's taxable
- * total. That is the AGT rule for `taxContribution` in electronic invoicing —
- * "o valor calculado neste campo deverá ser arredondado por excesso para o
- * cêntimo seguinte" (23,144 → 23,15; 0,001844 → 0,01) — and INVGEST follows
- * it, so it is the only way a record imported from a document lands on the
- * document's own total: 2 × 17 105,26 is 34 210,52 + 4 789,48 = 39 000,00
- * there and here, where rounding the tax half-up would have said 38 999,99.
+ * The tax on a taxable price is rounded **up to the next cêntimo**, once, on
+ * the line's discounted taxable total. That is the AGT rule for
+ * `taxContribution` in electronic invoicing — "o valor calculado neste campo
+ * deverá ser arredondado por excesso para o cêntimo seguinte" (23,144 → 23,15;
+ * 0,001844 → 0,01) — and INVGEST follows it, so it is the only way a record
+ * imported from a document lands on the document's own total: 2 × 17 105,26 is
+ * 34 210,52 + 4 789,48 = 39 000,00 there and here, where rounding the tax
+ * half-up would have said 38 999,99.
  *
- * Every argument is non-negative — the parsers refuse anything else — so the
- * `+500` is a half-up rounding rather than a half-away-from-zero one, and the
- * `+9999` a ceiling rather than a floor.
+ * A share of the record's discount comes off the line's total, tax included,
+ * because that is what a discount on the bill comes off. A line that takes one
+ * then has its IVA derived from what it finally came to, as a till line's is:
+ * its total is no longer a document's, and it is the paid amount that holds.
  */
-export function totalDaLinha(
-  quantidadeMil: number,
-  precoUnitarioCentimos: number,
-  taxaIvaCentesimos = 0,
-): number {
-  const produto = BigInt(quantidadeMil) * BigInt(precoUnitarioCentimos);
-  const liquido = (produto + 500n) / 1000n;
-  const taxa = BigInt(Math.min(Math.max(Math.round(taxaIvaCentesimos), 0), MAX_TAXA_IVA));
-  const centimos = taxa === 0n ? liquido : liquido + (liquido * taxa + 9999n) / 10000n;
-  const limite = BigInt(Number.MAX_SAFE_INTEGER);
-  return Number(centimos > limite ? limite : centimos);
+export function calcularLinha(linha: LinhaParaCalculo, descontoRegisto = 0): LinhaCalculada {
+  const produto = BigInt(linha.quantidadeMil) * BigInt(linha.precoUnitarioCentimos);
+  const bruto = (produto + 500n) / 1000n;
+  const taxa = BigInt(Math.min(Math.max(Math.round(linha.taxaIvaCentesimos), 0), MAX_TAXA_IVA));
+  // A taxable price has its tax added on top; an inclusive or an exempt one is
+  // already the whole amount.
+  const porCima = taxa > 0n && !linha.precoIncluiIva;
+  const comIva = (base: bigint) => (porCima ? base + (base * taxa + 9999n) / 10000n : base);
+
+  const liquido = bruto - descontoSobre(linha.desconto, bruto);
+  const semDesconto = comIva(bruto);
+  const antes = comIva(liquido);
+  const pedido = BigInt(Math.max(Math.round(descontoRegisto), 0));
+  const partilha = pedido < antes ? pedido : antes;
+  const total = antes - partilha;
+
+  let iva = 0n;
+  if (taxa > 0n) {
+    iva =
+      porCima && partilha === 0n
+        ? antes - liquido
+        : BigInt(repartirIvaIncluido(numero(total), Number(taxa)).imposto);
+  }
+
+  return {
+    bruto: numero(bruto),
+    semDesconto: numero(semDesconto),
+    descontoLinha: numero(semDesconto - antes),
+    descontoRegisto: numero(partilha),
+    total: numero(total),
+    iva: numero(iva),
+  };
+}
+
+/** A record priced: its lines, and its own discount spread over them. */
+export type RegistoCalculado = {
+  linhas: LinhaCalculada[];
+  /** What the lines come to before the record's own discount. */
+  subtotal: number;
+  /** What the record's discount took off the subtotal. */
+  desconto: number;
+  /** What was paid: `subtotal − desconto`, and exactly the sum of the lines' totals. */
+  total: number;
+};
+
+/**
+ * Prices a whole record. The record's discount is worked out on the lines'
+ * total and then spread over them, so that every line still says how much
+ * of it was IVA — the report adds that up, and an exempt article must not be
+ * reported as carrying tax because a discount on the bill happened to land on
+ * it.
+ */
+export function calcularRegisto(
+  linhas: readonly LinhaParaCalculo[],
+  desconto: Desconto | null,
+): RegistoCalculado {
+  const antes = linhas.map((linha) => calcularLinha(linha));
+  const subtotal = antes.reduce((soma, linha) => soma + linha.total, 0);
+  const valor = numero(descontoSobre(desconto, BigInt(subtotal)));
+  if (valor === 0) return { linhas: antes, subtotal, desconto: 0, total: subtotal };
+
+  const partes = repartir(
+    valor,
+    antes.map((linha) => linha.total),
+  );
+  return {
+    linhas: linhas.map((linha, indice) => calcularLinha(linha, partes[indice])),
+    subtotal,
+    desconto: valor,
+    total: subtotal - valor,
+  };
+}
+
+/**
+ * Splits `valor` cêntimos over `pesos` in proportion to them, exactly: the
+ * shares add up to `valor`, and none is larger than its own weight.
+ *
+ * Largest remainder: each share is first rounded down, and the cêntimos left
+ * over go one each to the shares that lost the most in that rounding, earliest
+ * line first on a tie. A share only gains a cêntimo when its exact value was
+ * not whole, so it never passes its weight — a line cannot be discounted into
+ * a negative total.
+ */
+function repartir(valor: number, pesos: readonly number[]): number[] {
+  const soma = BigInt(pesos.reduce((acumulado, peso) => acumulado + peso, 0));
+  const total = BigInt(valor);
+  if (total <= 0n || soma <= 0n) return pesos.map(() => 0);
+
+  const partes = pesos.map((peso) => (total * BigInt(peso)) / soma);
+  let falta = total - partes.reduce((acumulado, parte) => acumulado + parte, 0n);
+  const ordem = pesos
+    .map((peso, indice) => ({ indice, resto: (total * BigInt(peso)) % soma }))
+    .sort((a, b) => (a.resto === b.resto ? a.indice - b.indice : a.resto > b.resto ? -1 : 1));
+  for (const { indice } of ordem) {
+    if (falta === 0n) break;
+    partes[indice]! += 1n;
+    falta -= 1n;
+  }
+  return partes.map(numero);
 }

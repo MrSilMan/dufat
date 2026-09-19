@@ -3,12 +3,16 @@ import {
   formatCentimos,
   formatCentimosNumero,
   quantidadeMilParaTexto,
-  taxaIvaParaTexto,
 } from "@/lib/relatorios/dinheiro";
 import {
   ROTULO_CONTRAPARTE,
   ROTULO_TIPO,
+  descontoDoRegisto,
+  rotuloDescontoDaLinha,
+  rotuloDescontoDoRegisto,
+  rotuloIvaDaLinha,
   totalDoRegisto,
+  valorDaLinha,
   type LinhaVista,
   type RegistoVista,
   type Totais,
@@ -45,6 +49,11 @@ export function ResumoRelatorio({ totais, nota }: { totais: Totais; nota?: strin
  * the records instead of at the foot of a page that grows all day.
  */
 export function CartoesTotais({ totais, nota }: { totais: Totais; nota?: string }) {
+  const descontos = [
+    totais.descontosVendas > 0 && `${formatCentimos(totais.descontosVendas)} nas vendas`,
+    totais.descontosDespesas > 0 && `${formatCentimos(totais.descontosDespesas)} nas despesas`,
+  ].filter(Boolean);
+
   return (
     <div className="space-y-2">
       <div className="grid grid-cols-3 gap-2 sm:gap-3">
@@ -56,6 +65,18 @@ export function CartoesTotais({ totais, nota }: { totais: Totais; nota?: string 
         />
         <Cartao rotulo="Saldo" valor={totais.saldo} detalhe="Vendas − despesas" destaque />
       </div>
+      {/* Only when there is tax to report: a day of exempt lines should not
+        carry a row of zeros around. */}
+      {(totais.ivaVendas > 0 || totais.ivaDespesas > 0) && (
+        <p className="text-xs text-a-faint">
+          Inclui IVA de {formatCentimos(totais.ivaVendas)} nas vendas
+          {totais.ivaDespesas > 0 && <> e {formatCentimos(totais.ivaDespesas)} nas despesas</>}.
+        </p>
+      )}
+      {/* The totals are already net of them; this says how much was given. */}
+      {descontos.length > 0 && (
+        <p className="text-xs text-a-faint">Descontos de {descontos.join(" e ")}, já deduzidos.</p>
+      )}
       {nota && <p className="text-xs text-a-faint">{nota}</p>}
     </div>
   );
@@ -137,12 +158,14 @@ function Cartao({
   );
 }
 
-/** "2 × 85 000,00 Kz", and the IVA when the price is the taxable one. */
+/** "2 × 85 000,00 Kz", with what the line says about its IVA and its discount. */
 function calculoDaLinha(linha: LinhaVista): string {
-  const calculo = `${quantidadeMilParaTexto(linha.quantidadeMil)} × ${formatCentimosNumero(linha.precoUnitarioCentimos)} Kz`;
-  return linha.taxaIvaCentesimos > 0
-    ? `${calculo} + IVA ${taxaIvaParaTexto(linha.taxaIvaCentesimos)}`
-    : calculo;
+  const partes = [
+    `${quantidadeMilParaTexto(linha.quantidadeMil)} × ${formatCentimosNumero(linha.precoUnitarioCentimos)} Kz`,
+    rotuloIvaDaLinha(linha),
+    rotuloDescontoDaLinha(linha),
+  ];
+  return partes.filter(Boolean).join(" · ");
 }
 
 /**
@@ -170,6 +193,7 @@ export function TabelaRegistos({ registos }: { registos: readonly RegistoVista[]
     <ul className="space-y-3">
       {ordenados.map((registo, indice) => {
         const total = totalDoRegisto(registo);
+        const desconto = descontoDoRegisto(registo);
         const venda = registo.tipo === "VENDA";
         return (
           <li key={registo.id} className="card-admin overflow-hidden">
@@ -207,10 +231,22 @@ export function TabelaRegistos({ registos }: { registos: readonly RegistoVista[]
                     </span>
                   </span>
                   <span className="shrink-0 font-mono tabular-nums text-a-text">
-                    {formatCentimosNumero(linha.valorCentimos)}
+                    {formatCentimosNumero(valorDaLinha(linha))}
                   </span>
                 </li>
               ))}
+              {/* The bill's own discount, once, under the articles it came
+                off — the header's total is what is left after it. */}
+              {desconto > 0 && (
+                <li className="flex items-center gap-3 px-4 py-2.5 text-sm sm:px-5">
+                  <span className="min-w-0 flex-1 text-a-muted">
+                    {rotuloDescontoDoRegisto(registo)}
+                  </span>
+                  <span className="shrink-0 font-mono tabular-nums text-a-muted">
+                    −{formatCentimosNumero(desconto)}
+                  </span>
+                </li>
+              )}
             </ul>
 
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-a-line px-4 py-2.5 text-xs text-a-muted sm:px-5">

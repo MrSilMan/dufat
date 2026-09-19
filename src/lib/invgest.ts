@@ -257,7 +257,7 @@ export async function listAllItems(
  *
  * The IVA is rounded **up to the next cêntimo**, the AGT rule for
  * `taxContribution` in electronic invoicing, so one unit priced here agrees to
- * the cêntimo with a one-unit line in a report. `totalDaLinha` in
+ * the cêntimo with a one-unit line in a report. `calcularLinha` in
  * `lib/relatorios/dinheiro.ts` is the same rule for a whole line, and the two
  * have to move together; this module stays import-free on purpose, being the
  * bare API client, which is why the rule is spelled out twice.

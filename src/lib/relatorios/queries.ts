@@ -1,13 +1,39 @@
 import "server-only";
-import type { Prisma } from "@/generated/prisma/client";
+import type { Prisma, TipoDesconto } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
 import { dateParaDia, diaParaDate, hojeLuanda, isDia } from "@/lib/relatorios/dia";
+import type { Desconto } from "@/lib/relatorios/dinheiro";
 import type {
   EstadoRelatorio,
   LinhaVista,
   RegistoVista,
   TipoLinha,
 } from "@/lib/relatorios/resumo";
+
+/** The two columns a discount is stored in, read back as one value. */
+export function descontoDasColunas(
+  tipo: TipoDesconto | null,
+  valor: bigint | null,
+): Desconto | null {
+  if (tipo === null || valor === null) return null;
+  return tipo === "PERCENTAGEM"
+    ? { tipo, centesimos: Number(valor) }
+    : { tipo, centimos: Number(valor) };
+}
+
+/** A discount as its two columns hold it; both null when there is none. */
+export function colunasDoDesconto(desconto: Desconto | null): {
+  descontoTipo: TipoDesconto | null;
+  descontoValor: bigint | null;
+} {
+  if (!desconto) return { descontoTipo: null, descontoValor: null };
+  return {
+    descontoTipo: desconto.tipo,
+    descontoValor: BigInt(
+      desconto.tipo === "PERCENTAGEM" ? desconto.centesimos : desconto.centimos,
+    ),
+  };
+}
 
 /** BigInt does not cross the server/client boundary as a plain number. */
 export function vistaLinha(linha: {
@@ -17,6 +43,11 @@ export function vistaLinha(linha: {
   quantidadeMil: number;
   precoUnitarioCentimos: bigint;
   taxaIvaCentesimos: number;
+  precoIncluiIva: boolean;
+  descontoTipo: TipoDesconto | null;
+  descontoValor: bigint | null;
+  descontoCentimos: bigint;
+  descontoRegistoCentimos: bigint;
   valorCentimos: bigint;
   artigoInvgestId: string | null;
   artigoCodigo: string | null;
@@ -31,6 +62,10 @@ export function vistaLinha(linha: {
     quantidadeMil: linha.quantidadeMil,
     precoUnitarioCentimos: Number(linha.precoUnitarioCentimos),
     taxaIvaCentesimos: linha.taxaIvaCentesimos,
+    precoIncluiIva: linha.precoIncluiIva,
+    desconto: descontoDasColunas(linha.descontoTipo, linha.descontoValor),
+    descontoCentimos: Number(linha.descontoCentimos),
+    descontoRegistoCentimos: Number(linha.descontoRegistoCentimos),
     valorCentimos: Number(linha.valorCentimos),
     artigoInvgestId: linha.artigoInvgestId,
     artigoCodigo: linha.artigoCodigo,
@@ -47,6 +82,11 @@ export const SELECT_LINHA = {
   quantidadeMil: true,
   precoUnitarioCentimos: true,
   taxaIvaCentesimos: true,
+  precoIncluiIva: true,
+  descontoTipo: true,
+  descontoValor: true,
+  descontoCentimos: true,
+  descontoRegistoCentimos: true,
   valorCentimos: true,
   artigoInvgestId: true,
   artigoCodigo: true,
@@ -66,6 +106,8 @@ export const SELECT_REGISTO = {
   metodoPagamentoId: true,
   metodoPagamentoNome: true,
   nota: true,
+  descontoTipo: true,
+  descontoValor: true,
   versao: true,
   linhas: { orderBy: { ordem: "asc" }, select: SELECT_LINHA },
 } as const;
@@ -81,6 +123,8 @@ export function vistaRegisto(registo: {
   metodoPagamentoId: string;
   metodoPagamentoNome: string;
   nota: string | null;
+  descontoTipo: TipoDesconto | null;
+  descontoValor: bigint | null;
   versao: number;
   linhas: Parameters<typeof vistaLinha>[0][];
 }): RegistoVista {
@@ -95,6 +139,7 @@ export function vistaRegisto(registo: {
     metodoPagamentoId: registo.metodoPagamentoId,
     metodoPagamentoNome: registo.metodoPagamentoNome,
     nota: registo.nota,
+    desconto: descontoDasColunas(registo.descontoTipo, registo.descontoValor),
     versao: registo.versao,
     linhas: registo.linhas.map(vistaLinha),
   };
