@@ -89,6 +89,16 @@ export function IconExternal({ className }: IconProps) {
   );
 }
 
+/** Back arrow */
+export function IconArrowLeft({ className }: IconProps) {
+  return (
+    <svg {...base(className)}>
+      <path d="M19 12H5" />
+      <path d="m11 6-6 6 6 6" />
+    </svg>
+  );
+}
+
 /** Plus */
 export function IconPlus({ className }: IconProps) {
   return (

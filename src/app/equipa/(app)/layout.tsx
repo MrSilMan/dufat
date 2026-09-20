@@ -1,13 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { caminhoReporPassword, getSession } from "@/lib/auth";
+import { caminhoReporPassword, getSession, podeVerBackoffice } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { getSiteSettings } from "@/lib/settings";
 import { logout } from "@/server/actions/auth";
 import { DufatLogo } from "@/components/brand/DufatLogo";
 import { ThemeToggle } from "@/components/admin/ThemeToggle";
-import { IconExternal, IconLogout } from "@/components/admin/icons";
+import { IconArrowLeft, IconExternal, IconLogout } from "@/components/admin/icons";
 import { EquipaNav } from "@/components/equipa/EquipaNav";
 import { EquipaTabBar } from "@/components/equipa/EquipaTabBar";
 import { periodoAtual } from "@/lib/award/periodo";
@@ -78,11 +78,17 @@ export default async function EquipaLayout({ children }: { children: React.React
   });
   const podeRegistar = !folha || folha.estado === "ABERTA";
   const comRelatorios = temAcesso(resolverAcesso(user));
+  // The admin sidebar links into this area, so without a way back the only
+  // exit is the browser's. Shown to whoever the back-office guard would admit,
+  // never to a COLABORADOR, who would just be bounced back here.
+  const comBackoffice = podeVerBackoffice(user.role);
 
   return (
     <div id="admin-shell" className="admin-shell flex min-h-screen flex-col">
       <header className="admin-chrome admin-chrome-bottom sticky top-0 z-30">
-        <div className="mx-auto flex h-16 w-full max-w-5xl items-center gap-4 px-5 md:px-8">
+        {/* Tighter gap below `sm:` — with the "Administração" link in the row,
+            the 360px header is 1px over budget at gap-4. */}
+        <div className="mx-auto flex h-16 w-full max-w-5xl items-center gap-2 px-5 sm:gap-4 md:px-8">
           <Link
             href="/equipa"
             aria-label="A minha atividade"
@@ -95,6 +101,17 @@ export default async function EquipaLayout({ children }: { children: React.React
           </span>
 
           <div className="ml-auto flex items-center gap-2">
+            {comBackoffice && (
+              <Link
+                href="/admin"
+                title="Voltar à administração"
+                aria-label="Voltar à administração"
+                className="flex h-11 items-center gap-1.5 rounded-lg px-2 text-a-muted transition-colors hover:bg-a-hover hover:text-a-text sm:h-8"
+              >
+                <IconArrowLeft className="h-4 w-4 shrink-0" />
+                <span className="hidden text-sm font-medium md:inline">Administração</span>
+              </Link>
+            )}
             <ThemeToggle variant="icon" />
             {/* Secondary for someone logging their day — kept off the 360px
                 header, where three 44px targets plus the logo do not fit. */}

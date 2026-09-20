@@ -186,6 +186,17 @@ export async function assertGestaoRH(): Promise<Session> {
   return session;
 }
 
+/**
+ * Whether this role has a back-office to return to.
+ *
+ * Mirrors requireAdmin(): the "Administração" link in the employee header is
+ * only shown to people the guard would actually let in, so nobody is offered a
+ * door that bounces them straight back.
+ */
+export function podeVerBackoffice(role: Role): boolean {
+  return ROLES_BACKOFFICE.includes(role);
+}
+
 export function podeVerTodosOsScores(role: Role): boolean {
   return ROLES_RH.includes(role);
 }
