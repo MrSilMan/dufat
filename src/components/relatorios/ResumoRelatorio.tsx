@@ -22,12 +22,18 @@ import {
 const badgeBase =
   "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium";
 
-export function EstadoRelatorioBadge({ estado }: { estado: string }) {
+/** A deleted report reads as deleted, whatever state it was deleted in. */
+export function EstadoRelatorioBadge({ estado, apagado = false }: { estado: string; apagado?: boolean }) {
   const finalizado = estado === "FINALIZADO";
   return (
-    <span className={cn(badgeBase, finalizado ? "badge-success" : "badge-warm")}>
+    <span
+      className={cn(
+        badgeBase,
+        apagado ? "badge-danger" : finalizado ? "badge-success" : "badge-warm",
+      )}
+    >
       <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden />
-      {finalizado ? "Finalizado" : "Rascunho"}
+      {apagado ? "Apagado" : finalizado ? "Finalizado" : "Rascunho"}
     </span>
   );
 }

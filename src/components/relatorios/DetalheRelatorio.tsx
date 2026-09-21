@@ -38,14 +38,29 @@ export function DetalheRelatorio({
   acoes?: ReactNode;
 }) {
   const finalizado = relatorio.estado === "FINALIZADO";
+  const { apagado } = relatorio;
 
   return (
     <div className="space-y-8">
-      <p className="text-sm text-a-muted">
-        {finalizado
-          ? `Finalizado${relatorio.finalizadoEm ? ` em ${formatDataHoraLuanda(relatorio.finalizadoEm)}` : ""}${relatorio.finalizadoPorNome ? ` por ${relatorio.finalizadoPorNome}` : ""}.`
-          : `Rascunho em curso — última alteração ${formatDataHoraLuanda(relatorio.updatedAt)}. Recarregue a página para ver as alterações mais recentes.`}
-      </p>
+      {apagado ? (
+        <div className="card-admin space-y-1 border-rose-500/40 p-4 text-sm">
+          <p className="font-semibold text-a-text">
+            Apagado em {formatDataHoraLuanda(apagado.em)}
+            {apagado.porNome ? ` por ${apagado.porNome}` : ""}.
+          </p>
+          {apagado.motivo && <p className="text-a-muted">Motivo: {apagado.motivo}</p>}
+          <p className="text-a-muted">
+            Não aparece nas listas nem conta nos totais, e o colaborador não o pode alterar. Estava{" "}
+            {finalizado ? "finalizado" : "em rascunho"}.
+          </p>
+        </div>
+      ) : (
+        <p className="text-sm text-a-muted">
+          {finalizado
+            ? `Finalizado${relatorio.finalizadoEm ? ` em ${formatDataHoraLuanda(relatorio.finalizadoEm)}` : ""}${relatorio.finalizadoPorNome ? ` por ${relatorio.finalizadoPorNome}` : ""}.`
+            : `Rascunho em curso — última alteração ${formatDataHoraLuanda(relatorio.updatedAt)}. Recarregue a página para ver as alterações mais recentes.`}
+        </p>
+      )}
 
       {/* Side by side only on wide screens: next to the admin sidebar, a 1280px
           viewport leaves the lines table too narrow to read. The single column

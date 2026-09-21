@@ -61,6 +61,8 @@ const ROTULO_ACAO: Record<string, string> = {
   FINALIZADO: "Finalizou o relatório",
   REABERTO: "Reabriu o relatório",
   DATA_ALTERADA: "Mudou a data do relatório",
+  APAGADO: "Apagou o relatório",
+  RESTAURADO: "Restaurou o relatório",
 };
 
 function comoRegisto(valor: unknown): InstantaneoRegisto | null {
@@ -181,6 +183,22 @@ function detalhes(entrada: Entrada): string[] {
     }
     case "REABERTO":
       return entrada.nota ? [`Motivo: ${entrada.nota}`] : [];
+    case "APAGADO": {
+      // What went out of the totals with it.
+      const t = entrada.antes as {
+        registos?: number;
+        vendas?: number;
+        despesas?: number;
+      } | null;
+      return [
+        ...(t && typeof t.vendas === "number"
+          ? [
+              `${t.registos ?? 0} registo(s) · Vendas ${formatCentimos(t.vendas)} · Despesas ${formatCentimos(t.despesas ?? 0)}`,
+            ]
+          : []),
+        ...(entrada.nota ? [`Motivo: ${entrada.nota}`] : []),
+      ];
+    }
     case "DATA_ALTERADA": {
       const dia = (valor: unknown) => {
         const texto = (valor as { dia?: unknown } | null)?.dia;

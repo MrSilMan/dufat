@@ -60,6 +60,8 @@ export type AuditAction =
   | "relatorio.finalizado"
   | "relatorio.reaberto"
   | "relatorio.data_alterada"
+  | "relatorio.apagado"
+  | "relatorio.restaurado"
   | "relatorio.acesso_alterado";
 
 /** Portuguese labels for the audit table and its filter dropdown. */
@@ -114,6 +116,8 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "relatorio.finalizado": "Finalizou relatório diário",
   "relatorio.reaberto": "Reabriu relatório diário",
   "relatorio.data_alterada": "Mudou a data de relatório diário",
+  "relatorio.apagado": "Apagou relatório diário",
+  "relatorio.restaurado": "Restaurou relatório diário",
   "relatorio.acesso_alterado": "Alterou acesso aos relatórios",
 };
 
@@ -178,6 +182,8 @@ export const AUDIT_GROUPS: Record<string, AuditAction[]> = {
     "relatorio.finalizado",
     "relatorio.reaberto",
     "relatorio.data_alterada",
+    "relatorio.apagado",
+    "relatorio.restaurado",
     "relatorio.acesso_alterado",
   ],
 };

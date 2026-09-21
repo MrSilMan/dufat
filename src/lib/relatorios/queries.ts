@@ -146,8 +146,17 @@ export function vistaRegisto(registo: {
   };
 }
 
-/** One report with everything its screens, print and CSV show. */
-export async function carregarRelatorio(id: string) {
+/**
+ * One report with everything its screens, print and CSV show.
+ *
+ * A deleted report reads as not found unless `incluirApagado` is passed — for
+ * the few screens that deal with it as such (the admin's, which can restore
+ * it; its author's, which says it is gone).
+ */
+export async function carregarRelatorio(
+  id: string,
+  { incluirApagado = false }: { incluirApagado?: boolean } = {},
+) {
   const relatorio = await prisma.relatorioDiario.findUnique({
     where: { id },
     select: {
@@ -159,6 +168,9 @@ export async function carregarRelatorio(id: string) {
       createdAt: true,
       updatedAt: true,
       userId: true,
+      apagadoEm: true,
+      motivoApagado: true,
+      apagadoPor: { select: { name: true } },
       user: { select: { name: true, email: true } },
       finalizadoPor: { select: { name: true } },
       registos: {
@@ -167,7 +179,7 @@ export async function carregarRelatorio(id: string) {
       },
     },
   });
-  if (!relatorio) return null;
+  if (!relatorio || (relatorio.apagadoEm && !incluirApagado)) return null;
 
   return {
     id: relatorio.id,
@@ -181,6 +193,14 @@ export async function carregarRelatorio(id: string) {
     autorId: relatorio.userId,
     autorNome: relatorio.user.name,
     autorEmail: relatorio.user.email,
+    /** Null for a report in use. */
+    apagado: relatorio.apagadoEm
+      ? {
+          em: relatorio.apagadoEm,
+          porNome: relatorio.apagadoPor?.name ?? null,
+          motivo: relatorio.motivoApagado,
+        }
+      : null,
     /** In entry order, each with its lines and its payments — what the totals read. */
     registos: relatorio.registos.map(vistaRegisto),
   };
@@ -248,14 +268,23 @@ export type FiltrosRelatorios = {
   ate?: string;
 };
 
+/** The `estado` filter value that lists deleted reports instead — admin only. */
+export const ESTADO_APAGADO = "APAGADO";
+
 /**
  * Everyone's reports for a date range, with totals — the admin's list and the
  * read-only one granted viewers get are the same query.
  *
+ * Deleted reports are left out. The admin alone can list them, by asking for
+ * `estado` "APAGADO" with `apagados` set; anyone else asking gets the default.
+ *
  * Defaults to the thirty days up to today in Luanda; unparseable filters fall
  * back to the defaults rather than erroring on a hand-edited URL.
  */
-export async function listarRelatorios(params: FiltrosRelatorios) {
+export async function listarRelatorios(
+  params: FiltrosRelatorios,
+  { apagados = false }: { apagados?: boolean } = {},
+) {
   const hoje = hojeLuanda();
   const ate = params.ate && isDia(params.ate) ? params.ate : hoje;
   let desde = params.desde && isDia(params.desde) ? params.desde : undefined;
@@ -265,12 +294,18 @@ export async function listarRelatorios(params: FiltrosRelatorios) {
     desde = dateParaDia(inicio);
   }
   const estado =
-    params.estado === "RASCUNHO" || params.estado === "FINALIZADO" ? params.estado : undefined;
+    params.estado === "RASCUNHO" ||
+    params.estado === "FINALIZADO" ||
+    (apagados && params.estado === ESTADO_APAGADO)
+      ? params.estado
+      : undefined;
   const colaborador = params.colaborador || undefined;
 
   const where: Prisma.RelatorioDiarioWhereInput = {
     dia: { gte: diaParaDate(desde), lte: diaParaDate(ate) },
-    ...(estado ? { estado } : {}),
+    ...(estado === ESTADO_APAGADO
+      ? { apagadoEm: { not: null } }
+      : { apagadoEm: null, ...(estado ? { estado } : {}) }),
     ...(colaborador ? { userId: colaborador } : {}),
   };
 
@@ -284,11 +319,12 @@ export async function listarRelatorios(params: FiltrosRelatorios) {
         dia: true,
         estado: true,
         updatedAt: true,
+        apagadoEm: true,
         user: { select: { name: true } },
       },
     }),
     prisma.user.findMany({
-      where: { relatorios: { some: {} } },
+      where: { relatorios: { some: apagados ? {} : { apagadoEm: null } } },
       orderBy: { name: "asc" },
       select: { id: true, name: true },
     }),
@@ -302,6 +338,7 @@ export async function listarRelatorios(params: FiltrosRelatorios) {
       dia: dateParaDia(r.dia),
       estado: r.estado as EstadoRelatorio,
       updatedAt: r.updatedAt,
+      apagadoEm: r.apagadoEm,
       autorNome: r.user.name,
       totais: totais.get(r.id) ?? { vendas: 0, despesas: 0, linhas: 0 },
     })),

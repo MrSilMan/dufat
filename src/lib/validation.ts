@@ -810,3 +810,17 @@ export const reabrirRelatorioSchema = z.object({
     .min(5, "Explique porque está a reabrir (mín. 5 caracteres)")
     .max(500, "Motivo demasiado longo (máx. 500 caracteres)"),
 });
+
+/** The admin deletes a report (it can be restored), with the reason on record. */
+export const apagarRelatorioSchema = z.object({
+  id: z.string().min(1),
+  motivo: z
+    .string()
+    .trim()
+    .min(5, "Explique porque está a apagar (mín. 5 caracteres)")
+    .max(500, "Motivo demasiado longo (máx. 500 caracteres)"),
+});
+
+export const restaurarRelatorioSchema = z.object({
+  id: z.string().min(1),
+});

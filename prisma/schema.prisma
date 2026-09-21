@@ -1,6 +1,9 @@
 generator client {
-  provider = "prisma-client"
-  output   = "../src/generated/prisma"
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  /// For the one-report-per-day rule on `RelatorioDiario`, which only counts
+  /// reports that have not been deleted.
+  previewFeatures = ["partialIndexes"]
 }
 
 datasource db {
@@ -90,6 +93,7 @@ model User {
 
   relatorios            RelatorioDiario[]    @relation("RelatorioAutor")
   relatoriosFinalizados RelatorioDiario[]    @relation("RelatorioFinalizadoPor")
+  relatoriosApagados    RelatorioDiario[]    @relation("RelatorioApagadoPor")
   historicoRelatorios   RelatorioHistorico[]
 
   createdAt DateTime @default(now())
@@ -662,6 +666,10 @@ enum AcaoHistoricoRelatorio {
   REABERTO
   /// The admin moved the report to another day; `antes`/`depois` hold the days.
   DATA_ALTERADA
+  /// The admin deleted the report; `antes` holds what it added up to, `nota` why.
+  APAGADO
+  /// The admin brought a deleted report back.
+  RESTAURADO
 }
 
 /// One person's sales and expenses for one calendar day in Luanda.
@@ -683,13 +691,29 @@ model RelatorioDiario {
   finalizadoEm    DateTime?
   finalizadoPorId String?
   finalizadoPor   User?                @relation("RelatorioFinalizadoPor", fields: [finalizadoPorId], references: [id], onDelete: SetNull)
+  /// Set when the admin deleted the report — a day opened by mistake, or the
+  /// same sales filed twice. Nothing is removed: the report keeps its records
+  /// and history and can be restored, but every list, total, print and export
+  /// leaves it out, and its author can no longer write to it.
+  apagadoEm       DateTime?
+  apagadoPorId    String?
+  apagadoPor      User?                @relation("RelatorioApagadoPor", fields: [apagadoPorId], references: [id], onDelete: SetNull)
+  /// The reason given, also in the history; here so the deleted report can say
+  /// why without reading it.
+  motivoApagado   String?
   registos        RegistoRelatorio[]
   linhas          LinhaRelatorio[]
   historico       RelatorioHistorico[]
   createdAt       DateTime             @default(now())
   updatedAt       DateTime             @updatedAt
 
-  @@unique([userId, dia])
+  /// One report per person per day, counting only the ones not deleted:
+  /// deleting a report frees its day, so the person can open it again.
+  ///
+  /// Prisma still offers `userId_dia` as a unique key, but a person may have
+  /// deleted reports on the same day as a live one — look a day up with
+  /// `findFirst` and `apagadoEm: null`, never `findUnique` or `upsert` on it.
+  @@unique([userId, dia], where: { apagadoEm: null })
   @@index([dia, estado])
 }
 
@@ -850,7 +874,7 @@ model RelatorioHistorico {
   /// Line snapshots (amounts as numbers of cêntimos, method name included).
   antes       Json?
   depois      Json?
-  /// Reason given when reopening.
+  /// Reason given when reopening, moving, or deleting the report.
   nota        String?
   userId      String?
   user        User?                  @relation(fields: [userId], references: [id], onDelete: SetNull)

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { formatCentimosNumero } from "@/lib/relatorios/dinheiro";
 import { formatDataHoraLuanda, rotuloDiaCurto } from "@/lib/relatorios/dia";
-import type { ListaRelatoriosDados } from "@/lib/relatorios/queries";
+import { ESTADO_APAGADO, type ListaRelatoriosDados } from "@/lib/relatorios/queries";
 import { EmptyState, adminInputClass } from "@/components/admin/ui";
 import { IconReceipt } from "@/components/admin/icons";
 import { EstadoRelatorioBadge } from "@/components/relatorios/ResumoRelatorio";
@@ -12,17 +12,21 @@ import { EstadoRelatorioBadge } from "@/components/relatorios/ResumoRelatorio";
  *
  * Each audience stays inside its own area: `filtroPath` is where the filter
  * form submits (this same list), `detalhePath` prefixes each report's link.
+ * `apagados` offers the deleted reports as a state to filter by — the admin's.
  */
 export function ListaRelatorios({
   dados,
   filtroPath,
   detalhePath,
+  apagados = false,
 }: {
   dados: ListaRelatoriosDados;
   filtroPath: string;
   detalhePath: string;
+  apagados?: boolean;
 }) {
   const { filtros, relatorios, autores, truncado } = dados;
+  const soApagados = filtros.estado === ESTADO_APAGADO;
 
   const soma = relatorios.reduce(
     (acc, r) => ({ vendas: acc.vendas + r.totais.vendas, despesas: acc.despesas + r.totais.despesas }),
@@ -53,6 +57,7 @@ export function ListaRelatorios({
             <option value="">Todos</option>
             <option value="RASCUNHO">Rascunho</option>
             <option value="FINALIZADO">Finalizado</option>
+            {apagados && <option value={ESTADO_APAGADO}>Apagados</option>}
           </select>
         </label>
         <label className="block text-sm">
@@ -82,18 +87,26 @@ export function ListaRelatorios({
 
       {relatorios.length === 0 ? (
         <div className="card-admin">
-          <EmptyState
-            icon={<IconReceipt className="h-5 w-5" />}
-            title="Nenhum relatório neste intervalo"
-            description="Os relatórios aparecem aqui assim que um colaborador abre o dia, ainda antes de o finalizar."
-          />
+          {soApagados ? (
+            <EmptyState
+              icon={<IconReceipt className="h-5 w-5" />}
+              title="Nenhum relatório apagado neste intervalo"
+              description="Os relatórios apagados ficam aqui, fora dos totais, até serem restaurados."
+            />
+          ) : (
+            <EmptyState
+              icon={<IconReceipt className="h-5 w-5" />}
+              title="Nenhum relatório neste intervalo"
+              description="Os relatórios aparecem aqui assim que um colaborador abre o dia, ainda antes de o finalizar."
+            />
+          )}
         </div>
       ) : (
         <>
           <p className="text-sm text-a-muted">
-            {relatorios.length} relatório(s){rascunhos > 0 ? `, ${rascunhos} em rascunho` : ""} ·
-            Vendas {formatCentimosNumero(soma.vendas)} Kz · Despesas{" "}
-            {formatCentimosNumero(soma.despesas)} Kz
+            {soApagados
+              ? `${relatorios.length} relatório(s) apagado(s), fora dos totais`
+              : `${relatorios.length} relatório(s)${rascunhos > 0 ? `, ${rascunhos} em rascunho` : ""} · Vendas ${formatCentimosNumero(soma.vendas)} Kz · Despesas ${formatCentimosNumero(soma.despesas)} Kz`}
             {truncado ? ` · a mostrar os ${relatorios.length} mais recentes` : ""}
           </p>
           <div className="card-admin overflow-hidden">
@@ -122,11 +135,16 @@ export function ListaRelatorios({
                       <td className="px-5 py-3.5">
                         <p className="font-semibold text-a-text">{relatorio.autorNome}</p>
                         <p className="text-xs text-a-faint">
-                          Alterado {formatDataHoraLuanda(relatorio.updatedAt)}
+                          {relatorio.apagadoEm
+                            ? `Apagado ${formatDataHoraLuanda(relatorio.apagadoEm)}`
+                            : `Alterado ${formatDataHoraLuanda(relatorio.updatedAt)}`}
                         </p>
                       </td>
                       <td className="px-5 py-3.5">
-                        <EstadoRelatorioBadge estado={relatorio.estado} />
+                        <EstadoRelatorioBadge
+                          estado={relatorio.estado}
+                          apagado={relatorio.apagadoEm !== null}
+                        />
                       </td>
                       <td className="px-5 py-3.5 text-right font-mono tabular-nums text-a-muted">
                         {relatorio.totais.linhas}

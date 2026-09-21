@@ -39,10 +39,12 @@ import {
   alterarDiaRelatorioSchema,
   alternarMetodoPagamentoSchema,
   apagarRegistoSchema,
+  apagarRelatorioSchema,
   finalizarRelatorioSchema,
   metodoPagamentoSchema,
   reabrirRelatorioSchema,
   registoRelatorioSchema,
+  restaurarRelatorioSchema,
   type FormState,
 } from "@/lib/validation";
 
@@ -113,6 +115,8 @@ const FALHA_GENERICA: FalhaRelatorio = {
 
 const MSG_FECHADO = "Este relatório já foi finalizado e não pode ser alterado.";
 
+const MSG_APAGADO = "Este relatório foi apagado pelo administrador e já não pode ser alterado.";
+
 const SEM_ACESSO: FalhaRelatorio = {
   ok: false,
   codigo: "SEM_ACESSO",
@@ -171,15 +175,19 @@ function instantaneo(registo: RegistoVista): Prisma.InputJsonObject {
 /**
  * Loads a report for writing by its author. Admins read every report but do
  * not write lines into someone else's: the figures are the colaborador's.
+ *
+ * A deleted report is refused as closed rather than not found, so an editor
+ * still open on it stops taking edits instead of failing record by record.
  */
 async function relatorioDoAutor(tx: Tx, relatorioId: string, session: Session) {
   const relatorio = await tx.relatorioDiario.findUnique({
     where: { id: relatorioId },
-    select: { userId: true, estado: true, versao: true },
+    select: { userId: true, estado: true, versao: true, apagadoEm: true },
   });
   if (!relatorio || relatorio.userId !== session.sub) {
     throw recusar("NAO_ENCONTRADO", "Relatório não encontrado.");
   }
+  if (relatorio.apagadoEm) throw recusar("FECHADO", MSG_APAGADO);
   if (relatorio.estado !== "RASCUNHO") throw recusar("FECHADO", MSG_FECHADO);
   return relatorio;
 }
@@ -188,16 +196,22 @@ async function relatorioDoAutor(tx: Tx, relatorioId: string, session: Session) {
  * Bumps the report's version, and is the gate every line write passes through.
  *
  * The conditional update takes the report's row lock, so it serialises against
- * `finalizarRelatorio` (which updates the same row): a line write racing a
- * finalization either commits first — and the finalization then fails its
- * version check — or finds the report already FINALIZADO and rolls back.
+ * `finalizarRelatorio` and `apagarRelatorio` (which update the same row): a
+ * line write racing either one commits first — and a finalization then fails
+ * its version check — or finds the report already closed and rolls back.
  */
 async function avancarVersao(tx: Tx, relatorioId: string): Promise<number> {
   const { count } = await tx.relatorioDiario.updateMany({
-    where: { id: relatorioId, estado: "RASCUNHO" },
+    where: { id: relatorioId, estado: "RASCUNHO", apagadoEm: null },
     data: { versao: { increment: 1 } },
   });
-  if (count === 0) throw recusar("FECHADO", MSG_FECHADO);
+  if (count === 0) {
+    const { apagadoEm } = await tx.relatorioDiario.findUniqueOrThrow({
+      where: { id: relatorioId },
+      select: { apagadoEm: true },
+    });
+    throw recusar("FECHADO", apagadoEm ? MSG_APAGADO : MSG_FECHADO);
+  }
   const { versao } = await tx.relatorioDiario.findUniqueOrThrow({
     where: { id: relatorioId },
     select: { versao: true },
@@ -779,23 +793,29 @@ export async function abrirRelatorio(_prev: FormState, formData: FormData): Prom
     return { ok: false, message, errors: { dia: [message] } };
   }
 
-  const chave = { userId_dia: { userId: session.sub, dia: diaParaDate(dia) } };
-  let id: string;
-  try {
-    ({ id } = await prisma.relatorioDiario.upsert({
-      where: chave,
-      create: { userId: session.sub, dia: diaParaDate(dia) },
-      update: {},
-      select: { id: true },
-    }));
-  } catch (error) {
-    // Two tabs opening the same day at once: the other one created it.
-    if (codigoPrisma(error) !== "P2002") throw error;
-    ({ id } = await prisma.relatorioDiario.findUniqueOrThrow({ where: chave, select: { id: true } }));
+  // Looked up, not upserted on the (person, day) key: that key is unique only
+  // among reports not deleted, and a deleted one on this day is not the day's
+  // report — opening the day again starts a new one.
+  const doDia = { userId: session.sub, dia: diaParaDate(dia), apagadoEm: null };
+  let relatorio = await prisma.relatorioDiario.findFirst({ where: doDia, select: { id: true } });
+  if (!relatorio) {
+    try {
+      relatorio = await prisma.relatorioDiario.create({
+        data: { userId: session.sub, dia: diaParaDate(dia) },
+        select: { id: true },
+      });
+    } catch (error) {
+      // Two tabs opening the same day at once: the other one created it.
+      if (codigoPrisma(error) !== "P2002") throw error;
+      relatorio = await prisma.relatorioDiario.findFirstOrThrow({
+        where: doDia,
+        select: { id: true },
+      });
+    }
   }
 
   revalidatePath("/equipa/relatorios");
-  redirect(`/equipa/relatorios/${id}`);
+  redirect(`/equipa/relatorios/${relatorio.id}`);
 }
 
 /**
@@ -819,17 +839,20 @@ export async function finalizarRelatorio(
     resumo = await prisma.$transaction(async (tx) => {
       const relatorio = await tx.relatorioDiario.findUnique({
         where: { id },
-        select: { userId: true, estado: true, dia: true },
+        select: { userId: true, estado: true, dia: true, apagadoEm: true },
       });
       if (!relatorio || relatorio.userId !== session.sub) {
         throw recusar("NAO_ENCONTRADO", "Relatório não encontrado.");
       }
+      if (relatorio.apagadoEm) throw recusar("FECHADO", MSG_APAGADO);
       if (relatorio.estado !== "RASCUNHO") {
         throw recusar("FECHADO", "Este relatório já estava finalizado.");
       }
 
+      // Deleting bumps the version, so a report deleted since the read above
+      // fails this the same way as one edited in another tab.
       const { count } = await tx.relatorioDiario.updateMany({
-        where: { id, estado: "RASCUNHO", versao },
+        where: { id, estado: "RASCUNHO", versao, apagadoEm: null },
         data: {
           estado: "FINALIZADO",
           finalizadoEm: new Date(),
@@ -892,7 +915,8 @@ export async function finalizarRelatorio(
 
 /**
  * The report's current version, for a tab coming back into focus to tell
- * whether another tab has changed it meanwhile.
+ * whether another tab has changed it meanwhile. A deleted report reads as
+ * gone.
  */
 export async function consultarVersaoRelatorio(
   id: string,
@@ -901,15 +925,18 @@ export async function consultarVersaoRelatorio(
   const [relatorio, acesso] = await Promise.all([
     prisma.relatorioDiario.findUnique({
       where: { id },
-      select: { userId: true, versao: true, estado: true },
+      select: { userId: true, versao: true, estado: true, apagadoEm: true },
     }),
     acessoRelatorios(session),
   ]);
-  if (!relatorio || !podeVerRelatorio(session, acesso, relatorio.userId)) return null;
+  if (!relatorio || relatorio.apagadoEm) return null;
+  if (!podeVerRelatorio(session, acesso, relatorio.userId)) return null;
   return { versao: relatorio.versao, estado: relatorio.estado };
 }
 
 // ---------- Administrador ----------
+
+const MSG_RESTAURE_PRIMEIRO = "Este relatório está apagado. Restaure-o primeiro.";
 
 /**
  * Sends a finalized report back to draft so its author can correct it.
@@ -926,13 +953,14 @@ export async function reabrirRelatorio(_prev: FormState, formData: FormData): Pr
 
   const relatorio = await prisma.relatorioDiario.findUnique({
     where: { id },
-    select: { estado: true, dia: true, user: { select: { name: true } } },
+    select: { estado: true, dia: true, apagadoEm: true, user: { select: { name: true } } },
   });
   if (!relatorio) return { ok: false, message: "Relatório não encontrado." };
+  if (relatorio.apagadoEm) return { ok: false, message: MSG_RESTAURE_PRIMEIRO };
 
   const reaberto = await prisma.$transaction(async (tx) => {
     const { count } = await tx.relatorioDiario.updateMany({
-      where: { id, estado: "FINALIZADO" },
+      where: { id, estado: "FINALIZADO", apagadoEm: null },
       data: {
         estado: "RASCUNHO",
         finalizadoEm: null,
@@ -999,9 +1027,10 @@ export async function alterarDiaRelatorio(
 
   const relatorio = await prisma.relatorioDiario.findUnique({
     where: { id },
-    select: { dia: true, userId: true, user: { select: { name: true } } },
+    select: { dia: true, userId: true, apagadoEm: true, user: { select: { name: true } } },
   });
   if (!relatorio) return { ok: false, message: "Relatório não encontrado." };
+  if (relatorio.apagadoEm) return { ok: false, message: MSG_RESTAURE_PRIMEIRO };
 
   const anterior = dateParaDia(relatorio.dia);
   if (anterior === dia) {
@@ -1020,7 +1049,7 @@ export async function alterarDiaRelatorio(
       // Conditional on the day it was read with: two admins moving the same
       // report at once cannot both succeed and leave one move unrecorded.
       const { count } = await tx.relatorioDiario.updateMany({
-        where: { id, dia: relatorio.dia },
+        where: { id, dia: relatorio.dia, apagadoEm: null },
         data: { dia: diaParaDate(dia), versao: { increment: 1 } },
       });
       if (count === 0) return false;
@@ -1057,6 +1086,152 @@ export async function alterarDiaRelatorio(
   revalidarRelatorio(id);
   revalidatePath("/equipa/relatorios/equipa");
   return { ok: true, message: `Relatório passado para ${rotuloDiaCurto(dia)}.` };
+}
+
+/**
+ * Takes a report out of use — a day opened by mistake, or the same sales filed
+ * under two days. Admin only, with a reason, like reopening and moving.
+ *
+ * Nothing is deleted: the report is marked, and keeps its records and history
+ * so it can be restored. From then on no list, total, print or export counts
+ * it, its author can no longer write to it, and its day is free again — the
+ * person can open that day afresh. Drafts and finalized reports alike.
+ */
+export async function apagarRelatorio(_prev: FormState, formData: FormData): Promise<FormState> {
+  const admin = await assertAdminRole();
+
+  const result = apagarRelatorioSchema.safeParse(Object.fromEntries(formData));
+  if (!result.success) return validationError(result.error);
+  const { id, motivo } = result.data;
+
+  const relatorio = await prisma.relatorioDiario.findUnique({
+    where: { id },
+    select: { dia: true, user: { select: { name: true } } },
+  });
+  if (!relatorio) return { ok: false, message: "Relatório não encontrado." };
+
+  const resumo = await prisma.$transaction(async (tx) => {
+    // The version bump makes an editor still open on it fail its next save,
+    // and a finalization racing this one fail its version check.
+    const { count } = await tx.relatorioDiario.updateMany({
+      where: { id, apagadoEm: null },
+      data: {
+        apagadoEm: new Date(),
+        apagadoPorId: admin.sub,
+        motivoApagado: motivo,
+        versao: { increment: 1 },
+      },
+    });
+    if (count === 0) return null;
+
+    // What went out of the totals with it, as the history shows a finalization.
+    const registos = (
+      await tx.registoRelatorio.findMany({ where: { relatorioId: id }, select: SELECT_REGISTO })
+    ).map(vistaRegisto);
+    const totais = calcularTotais(registos);
+    const resumo = {
+      registos: registos.length,
+      linhas: registos.reduce((soma, registo) => soma + registo.linhas.length, 0),
+      vendas: totais.vendas,
+      despesas: totais.despesas,
+      saldo: totais.saldo,
+    };
+    await tx.relatorioHistorico.create({
+      data: {
+        relatorioId: id,
+        acao: "APAGADO",
+        antes: resumo,
+        nota: motivo,
+        userId: admin.sub,
+        userName: admin.name,
+      },
+    });
+    return resumo;
+  });
+  if (!resumo) return { ok: false, message: "O relatório já estava apagado." };
+
+  await recordAudit(admin, {
+    action: "relatorio.apagado",
+    entity: "RelatorioDiario",
+    entityId: id,
+    summary: `Apagou o relatório de ${relatorio.user.name} de ${rotuloDiaCurto(dateParaDia(relatorio.dia))} (${resumo.registos} registo(s), saldo ${formatCentimos(resumo.saldo)})`,
+    meta: { motivo },
+  });
+
+  revalidarRelatorio(id);
+  revalidatePath("/equipa/relatorios/equipa");
+  // The page it was deleted from stays, now offering to restore it: the undo
+  // is right where the mistake would be noticed.
+  redirect(`/admin/relatorios/${id}?apagado=1`);
+}
+
+/**
+ * Brings a deleted report back, on its day and in the state it was deleted in.
+ *
+ * Refused when the person has since opened another report for that day: a
+ * person has one report per day, and two reports' records are not merged
+ * behind anyone's back.
+ */
+export async function restaurarRelatorio(
+  _prev: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const admin = await assertAdminRole();
+
+  const result = restaurarRelatorioSchema.safeParse(Object.fromEntries(formData));
+  if (!result.success) return { ok: false, message: "Pedido inválido." };
+  const { id } = result.data;
+
+  const relatorio = await prisma.relatorioDiario.findUnique({
+    where: { id },
+    select: { dia: true, user: { select: { name: true } } },
+  });
+  if (!relatorio) return { ok: false, message: "Relatório não encontrado." };
+  const dia = dateParaDia(relatorio.dia);
+
+  let restaurado: boolean;
+  try {
+    restaurado = await prisma.$transaction(async (tx) => {
+      const { count } = await tx.relatorioDiario.updateMany({
+        where: { id, apagadoEm: { not: null } },
+        data: {
+          apagadoEm: null,
+          apagadoPorId: null,
+          motivoApagado: null,
+          versao: { increment: 1 },
+        },
+      });
+      if (count === 0) return false;
+      await tx.relatorioHistorico.create({
+        data: {
+          relatorioId: id,
+          acao: "RESTAURADO",
+          userId: admin.sub,
+          userName: admin.name,
+        },
+      });
+      return true;
+    });
+  } catch (error) {
+    // The unique (person, day) index: the day was opened again meanwhile.
+    if (codigoPrisma(error) !== "P2002") throw error;
+    return {
+      ok: false,
+      message: `${relatorio.user.name} já tem outro relatório de ${rotuloDiaCurto(dia)}. Só pode haver um por dia: apague esse, ou passe-o para outro dia, antes de restaurar este.`,
+    };
+  }
+  if (!restaurado) return { ok: false, message: "O relatório já não estava apagado." };
+
+  await recordAudit(admin, {
+    action: "relatorio.restaurado",
+    entity: "RelatorioDiario",
+    entityId: id,
+    summary: `Restaurou o relatório de ${relatorio.user.name} de ${rotuloDiaCurto(dia)}`,
+  });
+
+  revalidarRelatorio(id);
+  revalidatePath("/equipa/relatorios/equipa");
+  redirect(`/admin/relatorios/${id}?restaurado=1`);
 }
 
 function revalidarRelatorio(id: string): void {

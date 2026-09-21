@@ -18,7 +18,7 @@ export default async function RelatoriosAdminPage({
   searchParams: Promise<{ colaborador?: string; estado?: string; desde?: string; ate?: string }>;
 }) {
   await requireAdminRole();
-  const dados = await listarRelatorios(await searchParams);
+  const dados = await listarRelatorios(await searchParams, { apagados: true });
 
   return (
     <div className="space-y-8">
@@ -37,7 +37,12 @@ export default async function RelatoriosAdminPage({
         }
       />
 
-      <ListaRelatorios dados={dados} filtroPath="/admin/relatorios" detalhePath="/admin/relatorios" />
+      <ListaRelatorios
+        dados={dados}
+        filtroPath="/admin/relatorios"
+        detalhePath="/admin/relatorios"
+        apagados
+      />
     </div>
   );
 }

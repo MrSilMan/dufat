@@ -29,7 +29,7 @@ export default async function MeusRelatoriosPage() {
   const hoje = hojeLuanda();
 
   const relatorios = await prisma.relatorioDiario.findMany({
-    where: { userId: session.sub },
+    where: { userId: session.sub, apagadoEm: null },
     orderBy: { dia: "desc" },
     take: LIMITE,
     select: { id: true, dia: true, estado: true, updatedAt: true },

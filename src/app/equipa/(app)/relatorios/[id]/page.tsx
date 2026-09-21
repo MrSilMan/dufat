@@ -20,13 +20,43 @@ export const dynamic = "force-dynamic";
  * One day's report: for its author, the live editor while it is a draft and a
  * record once finalized; for someone granted read access, the reviewer's
  * read-only view with its history.
+ *
+ * A deleted report is gone for everyone but its author, who is told so — an
+ * editor left open on it lands here when its next save is refused.
  */
 export default async function RelatorioPage({ params }: { params: Promise<{ id: string }> }) {
   const { session, acesso } = await requireAcessoRelatorios();
   const { id } = await params;
 
-  const relatorio = await carregarRelatorio(id);
+  const relatorio = await carregarRelatorio(id, { incluirApagado: true });
   if (!relatorio) notFound();
+
+  if (relatorio.apagado) {
+    // The admin handles it from the back-office, where restoring lives.
+    if (acesso.admin) redirect(`/admin/relatorios/${id}`);
+    if (relatorio.autorId !== session.sub || !acesso.registar) notFound();
+    return (
+      <div className="space-y-6">
+        <PageHeader
+          eyebrow="Vendas e despesas"
+          title={rotuloDia(relatorio.dia)}
+          backHref="/equipa/relatorios"
+          backLabel="Relatórios"
+          action={<EstadoRelatorioBadge estado={relatorio.estado} apagado />}
+        />
+        <div className="card-admin space-y-2 p-5">
+          <p className="font-semibold text-a-text">O administrador apagou este relatório.</p>
+          <p className="text-sm text-a-muted">
+            Apagado em {formatDataHoraLuanda(relatorio.apagado.em)}. Já não conta nos totais e não
+            pode ser alterado. Se foi engano, peça ao administrador para o restaurar.
+          </p>
+          {relatorio.apagado.motivo && (
+            <p className="text-sm text-a-muted">Motivo: {relatorio.apagado.motivo}</p>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (relatorio.autorId !== session.sub || !acesso.registar) {
     // The admin reviews from the back-office, where reopening lives.
