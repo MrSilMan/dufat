@@ -660,6 +660,8 @@ enum AcaoHistoricoRelatorio {
   REGISTO_APAGADO
   FINALIZADO
   REABERTO
+  /// The admin moved the report to another day; `antes`/`depois` hold the days.
+  DATA_ALTERADA
 }
 
 /// One person's sales and expenses for one calendar day in Luanda.

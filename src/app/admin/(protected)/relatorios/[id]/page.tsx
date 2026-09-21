@@ -1,17 +1,18 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { requireAdminRole } from "@/lib/auth";
-import { rotuloDia } from "@/lib/relatorios/dia";
+import { hojeLuanda, rotuloDia } from "@/lib/relatorios/dia";
 import { carregarHistorico, carregarRelatorio } from "@/lib/relatorios/queries";
 import { PageHeader } from "@/components/admin/ui";
 import { BotoesDownload, DetalheRelatorio } from "@/components/relatorios/DetalheRelatorio";
+import { MudarDiaRelatorioForm } from "@/components/relatorios/MudarDiaRelatorioForm";
 import { ReabrirRelatorioForm } from "@/components/relatorios/ReabrirRelatorioForm";
 import { EstadoRelatorioBadge } from "@/components/relatorios/ResumoRelatorio";
 
 export const metadata: Metadata = { title: "Relatório diário", robots: { index: false } };
 export const dynamic = "force-dynamic";
 
-/** The admin's view of one report — the read-only view, plus reopening. */
+/** The admin's view of one report — the read-only view, plus reopening and moving it. */
 export default async function RelatorioAdminPage({
   params,
   searchParams,
@@ -52,7 +53,16 @@ export default async function RelatorioAdminPage({
       <DetalheRelatorio
         relatorio={relatorio}
         historico={historico}
-        acoes={finalizado ? <ReabrirRelatorioForm relatorioId={relatorio.id} /> : undefined}
+        acoes={
+          <>
+            {finalizado && <ReabrirRelatorioForm relatorioId={relatorio.id} />}
+            <MudarDiaRelatorioForm
+              relatorioId={relatorio.id}
+              dia={relatorio.dia}
+              hoje={hojeLuanda()}
+            />
+          </>
+        }
       />
     </div>
   );

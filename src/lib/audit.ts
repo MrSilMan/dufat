@@ -59,6 +59,7 @@ export type AuditAction =
   | "metodo_pagamento.reativado"
   | "relatorio.finalizado"
   | "relatorio.reaberto"
+  | "relatorio.data_alterada"
   | "relatorio.acesso_alterado";
 
 /** Portuguese labels for the audit table and its filter dropdown. */
@@ -112,6 +113,7 @@ export const AUDIT_ACTION_LABELS: Record<AuditAction, string> = {
   "metodo_pagamento.reativado": "Reativou método de pagamento",
   "relatorio.finalizado": "Finalizou relatório diário",
   "relatorio.reaberto": "Reabriu relatório diário",
+  "relatorio.data_alterada": "Mudou a data de relatório diário",
   "relatorio.acesso_alterado": "Alterou acesso aos relatórios",
 };
 
@@ -175,6 +177,7 @@ export const AUDIT_GROUPS: Record<string, AuditAction[]> = {
     "metodo_pagamento.reativado",
     "relatorio.finalizado",
     "relatorio.reaberto",
+    "relatorio.data_alterada",
     "relatorio.acesso_alterado",
   ],
 };

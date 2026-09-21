@@ -791,6 +791,17 @@ export const acessoRelatoriosSchema = z.object({
   ver: z.boolean(),
 });
 
+/** The admin moves a report to another day, with the reason on record. */
+export const alterarDiaRelatorioSchema = z.object({
+  id: z.string().min(1),
+  dia: diaSchema,
+  motivo: z
+    .string()
+    .trim()
+    .min(5, "Explique porque está a mudar a data (mín. 5 caracteres)")
+    .max(500, "Motivo demasiado longo (máx. 500 caracteres)"),
+});
+
 export const reabrirRelatorioSchema = z.object({
   id: z.string().min(1),
   motivo: z

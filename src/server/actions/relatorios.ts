@@ -36,6 +36,7 @@ import { acessoRelatorios, podeVerRelatorio } from "@/lib/relatorios/acesso";
 import {
   abrirRelatorioSchema,
   acessoRelatoriosSchema,
+  alterarDiaRelatorioSchema,
   alternarMetodoPagamentoSchema,
   apagarRegistoSchema,
   finalizarRelatorioSchema,
@@ -965,6 +966,97 @@ export async function reabrirRelatorio(_prev: FormState, formData: FormData): Pr
   // Redirect rather than return: the reopen form only exists on a finalized
   // report, so a returned message would unmount along with it.
   redirect(`/admin/relatorios/${id}?reaberto=1`);
+}
+
+/**
+ * Moves a report to another day — the colaborador filed it under the wrong
+ * one. Admin only, with a reason, like reopening: the move is recorded in the
+ * report's own history and in the audit trail.
+ *
+ * A draft or a finalized report alike; its state stays as it was. The version
+ * is bumped, so a tab still showing the old day cannot finalize it unseen.
+ * A person has one report per day, so the move is refused onto a day they
+ * already have one for — two reports' records are not merged behind anyone's
+ * back.
+ */
+export async function alterarDiaRelatorio(
+  _prev: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const admin = await assertAdminRole();
+
+  const result = alterarDiaRelatorioSchema.safeParse(Object.fromEntries(formData));
+  if (!result.success) return validationError(result.error);
+  const { id, dia, motivo } = result.data;
+
+  if (!isDia(dia)) {
+    return { ok: false, message: "Data inválida.", errors: { dia: ["Data inválida."] } };
+  }
+  if (dia > hojeLuanda()) {
+    const message = "Não pode passar um relatório para uma data futura.";
+    return { ok: false, message, errors: { dia: [message] } };
+  }
+
+  const relatorio = await prisma.relatorioDiario.findUnique({
+    where: { id },
+    select: { dia: true, userId: true, user: { select: { name: true } } },
+  });
+  if (!relatorio) return { ok: false, message: "Relatório não encontrado." };
+
+  const anterior = dateParaDia(relatorio.dia);
+  if (anterior === dia) {
+    const message = "O relatório já é desse dia.";
+    return { ok: false, message, errors: { dia: [message] } };
+  }
+
+  const ocupado = () => {
+    const message = `${relatorio.user.name} já tem um relatório de ${rotuloDiaCurto(dia)}. Só pode haver um por dia.`;
+    return { ok: false, message, errors: { dia: [message] } };
+  };
+
+  let movido: boolean;
+  try {
+    movido = await prisma.$transaction(async (tx) => {
+      // Conditional on the day it was read with: two admins moving the same
+      // report at once cannot both succeed and leave one move unrecorded.
+      const { count } = await tx.relatorioDiario.updateMany({
+        where: { id, dia: relatorio.dia },
+        data: { dia: diaParaDate(dia), versao: { increment: 1 } },
+      });
+      if (count === 0) return false;
+      await tx.relatorioHistorico.create({
+        data: {
+          relatorioId: id,
+          acao: "DATA_ALTERADA",
+          antes: { dia: anterior },
+          depois: { dia },
+          nota: motivo,
+          userId: admin.sub,
+          userName: admin.name,
+        },
+      });
+      return true;
+    });
+  } catch (error) {
+    // The unique (person, day) index: that day is taken.
+    if (codigoPrisma(error) === "P2002") return ocupado();
+    throw error;
+  }
+  if (!movido) {
+    return { ok: false, message: "O relatório foi alterado entretanto. Recarregue a página." };
+  }
+
+  await recordAudit(admin, {
+    action: "relatorio.data_alterada",
+    entity: "RelatorioDiario",
+    entityId: id,
+    summary: `Mudou a data do relatório de ${relatorio.user.name}: ${rotuloDiaCurto(anterior)} → ${rotuloDiaCurto(dia)}`,
+    meta: { motivo, antes: anterior, depois: dia },
+  });
+
+  revalidarRelatorio(id);
+  revalidatePath("/equipa/relatorios/equipa");
+  return { ok: true, message: `Relatório passado para ${rotuloDiaCurto(dia)}.` };
 }
 
 function revalidarRelatorio(id: string): void {

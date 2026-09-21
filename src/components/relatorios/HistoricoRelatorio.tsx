@@ -1,5 +1,5 @@
 import { formatCentimos, quantidadeMilParaTexto } from "@/lib/relatorios/dinheiro";
-import { formatDataHoraLuanda } from "@/lib/relatorios/dia";
+import { formatDataHoraLuanda, isDia, rotuloDiaCurto } from "@/lib/relatorios/dia";
 import { ROTULO_TIPO, rotuloPagamento, type TipoLinha } from "@/lib/relatorios/resumo";
 
 type Entrada = {
@@ -60,6 +60,7 @@ const ROTULO_ACAO: Record<string, string> = {
   REGISTO_APAGADO: "Apagou registo",
   FINALIZADO: "Finalizou o relatório",
   REABERTO: "Reabriu o relatório",
+  DATA_ALTERADA: "Mudou a data do relatório",
 };
 
 function comoRegisto(valor: unknown): InstantaneoRegisto | null {
@@ -180,6 +181,16 @@ function detalhes(entrada: Entrada): string[] {
     }
     case "REABERTO":
       return entrada.nota ? [`Motivo: ${entrada.nota}`] : [];
+    case "DATA_ALTERADA": {
+      const dia = (valor: unknown) => {
+        const texto = (valor as { dia?: unknown } | null)?.dia;
+        return typeof texto === "string" && isDia(texto) ? rotuloDiaCurto(texto) : "—";
+      };
+      return [
+        `${dia(entrada.antes)} → ${dia(entrada.depois)}`,
+        ...(entrada.nota ? [`Motivo: ${entrada.nota}`] : []),
+      ];
+    }
     default:
       return [];
   }
