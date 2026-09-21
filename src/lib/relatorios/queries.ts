@@ -51,8 +51,6 @@ export function vistaLinha(linha: {
   valorCentimos: bigint;
   artigoInvgestId: string | null;
   artigoCodigo: string | null;
-  metodoPagamentoId: string;
-  metodoPagamentoNome: string;
   ordem: number;
 }): LinhaVista {
   return {
@@ -69,8 +67,6 @@ export function vistaLinha(linha: {
     valorCentimos: Number(linha.valorCentimos),
     artigoInvgestId: linha.artigoInvgestId,
     artigoCodigo: linha.artigoCodigo,
-    metodoPagamentoId: linha.metodoPagamentoId,
-    metodoPagamentoNome: linha.metodoPagamentoNome,
     ordem: linha.ordem,
   };
 }
@@ -90,9 +86,13 @@ export const SELECT_LINHA = {
   valorCentimos: true,
   artigoInvgestId: true,
   artigoCodigo: true,
+  ordem: true,
+} as const;
+
+export const SELECT_PAGAMENTO = {
   metodoPagamentoId: true,
   metodoPagamentoNome: true,
-  ordem: true,
+  valorCentimos: true,
 } as const;
 
 export const SELECT_REGISTO = {
@@ -103,13 +103,12 @@ export const SELECT_REGISTO = {
   clienteInvgestId: true,
   facturaInvgestId: true,
   facturaCodigo: true,
-  metodoPagamentoId: true,
-  metodoPagamentoNome: true,
   nota: true,
   descontoTipo: true,
   descontoValor: true,
   versao: true,
   linhas: { orderBy: { ordem: "asc" }, select: SELECT_LINHA },
+  pagamentos: { orderBy: { ordem: "asc" }, select: SELECT_PAGAMENTO },
 } as const;
 
 export function vistaRegisto(registo: {
@@ -120,13 +119,12 @@ export function vistaRegisto(registo: {
   clienteInvgestId: string | null;
   facturaInvgestId: string | null;
   facturaCodigo: string | null;
-  metodoPagamentoId: string;
-  metodoPagamentoNome: string;
   nota: string | null;
   descontoTipo: TipoDesconto | null;
   descontoValor: bigint | null;
   versao: number;
   linhas: Parameters<typeof vistaLinha>[0][];
+  pagamentos: { metodoPagamentoId: string; metodoPagamentoNome: string; valorCentimos: bigint }[];
 }): RegistoVista {
   return {
     id: registo.id,
@@ -136,12 +134,15 @@ export function vistaRegisto(registo: {
     clienteInvgestId: registo.clienteInvgestId,
     facturaInvgestId: registo.facturaInvgestId,
     facturaCodigo: registo.facturaCodigo,
-    metodoPagamentoId: registo.metodoPagamentoId,
-    metodoPagamentoNome: registo.metodoPagamentoNome,
     nota: registo.nota,
     desconto: descontoDasColunas(registo.descontoTipo, registo.descontoValor),
     versao: registo.versao,
     linhas: registo.linhas.map(vistaLinha),
+    pagamentos: registo.pagamentos.map((pagamento) => ({
+      metodoPagamentoId: pagamento.metodoPagamentoId,
+      metodoPagamentoNome: pagamento.metodoPagamentoNome,
+      valorCentimos: Number(pagamento.valorCentimos),
+    })),
   };
 }
 
@@ -164,7 +165,6 @@ export async function carregarRelatorio(id: string) {
         orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         select: SELECT_REGISTO,
       },
-      linhas: { orderBy: { createdAt: "asc" }, select: SELECT_LINHA },
     },
   });
   if (!relatorio) return null;
@@ -181,15 +181,14 @@ export async function carregarRelatorio(id: string) {
     autorId: relatorio.userId,
     autorNome: relatorio.user.name,
     autorEmail: relatorio.user.email,
+    /** In entry order, each with its lines and its payments — what the totals read. */
     registos: relatorio.registos.map(vistaRegisto),
-    /** Every line, flat and in entry order — what the totals and CSV read. */
-    linhas: relatorio.linhas.map(vistaLinha),
   };
 }
 
 export type RelatorioCarregado = NonNullable<Awaited<ReturnType<typeof carregarRelatorio>>>;
 
-/** What the picker offers for new lines: active methods only. */
+/** What the picker offers for new records: active methods only. */
 export async function metodosAtivos() {
   return prisma.metodoPagamento.findMany({
     where: { ativo: true },

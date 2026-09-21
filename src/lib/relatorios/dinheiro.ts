@@ -412,3 +412,28 @@ function repartir(valor: number, pesos: readonly number[]): number[] {
   }
   return partes.map(numero);
 }
+
+// ---------- Pagamento misto ----------
+//
+// A record is paid one way, or split over several: part by transfer, the rest
+// in cash. Every way but the last is given as an amount, and the last takes
+// whatever of the total is left. That is how the till says it ("30 000 por
+// transferência, o resto em numerário"), and it means the split still adds up
+// when an article or a discount changes the total after it was typed.
+
+/**
+ * What each way of paying comes to, given the record's total and the amounts
+ * typed for every way but the last. With nothing typed, the one way is the
+ * whole total.
+ *
+ * `resto` is what the last way is left with. A split needs it to be more than
+ * nothing (a way that paid nothing is not a way the record was paid), and
+ * the caller decides what to say when it is not.
+ */
+export function repartirPagamento(
+  total: number,
+  parciais: readonly number[],
+): { valores: number[]; resto: number } {
+  const resto = parciais.reduce((falta, valor) => falta - valor, total);
+  return { valores: [...parciais, resto], resto };
+}

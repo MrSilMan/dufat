@@ -36,10 +36,12 @@ import {
   iguais,
   linhaVazia,
   novoId,
+  pagamentosEmEdicao,
   paraEnviar,
   registoVazio,
   vazio,
   type CamposLinha,
+  type CamposPagamento,
   type CamposRegisto,
   type EstadoRegisto,
   type Metodo,
@@ -111,10 +113,30 @@ function validarCampos(valor: unknown): CamposRegisto | null {
     !eTexto(c.facturaInvgestId) ||
     !eTexto(c.facturaCodigo) ||
     !eTexto(c.nota) ||
-    !eTexto(c.metodoPagamentoId) ||
     !Array.isArray(c.linhas) ||
     c.linhas.length === 0
   ) {
+    return null;
+  }
+
+  // A backup written before split payments existed has one method id in
+  // `metodoPagamentoId`, which is a payment of the whole total that way.
+  const legado = (valor as { metodoPagamentoId?: unknown }).metodoPagamentoId;
+  let pagamentos: CamposPagamento[];
+  if (Array.isArray(c.pagamentos)) {
+    if (
+      c.pagamentos.length === 0 ||
+      !c.pagamentos.every(
+        (p: Partial<CamposPagamento> | null) =>
+          p && eTexto(p.metodoPagamentoId) && eTexto(p.valor),
+      )
+    ) {
+      return null;
+    }
+    pagamentos = c.pagamentos.map(({ metodoPagamentoId, valor }) => ({ metodoPagamentoId, valor }));
+  } else if (eTexto(legado)) {
+    pagamentos = [{ metodoPagamentoId: legado, valor: "" }];
+  } else {
     return null;
   }
 
@@ -143,7 +165,8 @@ function validarCampos(valor: unknown): CamposRegisto | null {
       desconto: eTexto(l.desconto) ? l.desconto : "",
     });
   }
-  return { ...(c as CamposRegisto), desconto: eTexto(c.desconto) ? c.desconto : "", linhas };
+  const { metodoPagamentoId: _legado, ...resto } = c as CamposRegisto & { metodoPagamentoId?: unknown };
+  return { ...resto, desconto: eTexto(c.desconto) ? c.desconto : "", pagamentos, linhas };
 }
 
 function lerPendentes(relatorioId: string): Record<string, Pendente> {
@@ -416,7 +439,15 @@ export function EditorRelatorio({
       atuais.map((r) => {
         if (r.id !== id) return r;
         const errors = r.errors ? { ...r.errors } : undefined;
-        if (errors) for (const chave of chavesLimpas) delete errors[chave];
+        if (errors) {
+          // A field's own key, and those under it: `pagamentos` covers every
+          // `pagamentos.<n>.<campo>`, since a split's parts are checked together.
+          for (const chave of Object.keys(errors)) {
+            if (chavesLimpas.some((limpa) => chave === limpa || chave.startsWith(`${limpa}.`))) {
+              delete errors[chave];
+            }
+          }
+        }
         const estado: EstadoRegisto =
           r.estado === "conflito" || r.estado === "a_guardar" ? r.estado : "por_guardar";
         return { ...r, campos: mudar(r.campos), estado, errors };
@@ -517,7 +548,7 @@ export function EditorRelatorio({
       facturaCodigo: factura.codigo,
       nota: "",
       desconto: "",
-      metodoPagamentoId: metodos.length === 1 ? metodos[0]!.id : "",
+      pagamentos: [{ metodoPagamentoId: metodos.length === 1 ? metodos[0]!.id : "", valor: "" }],
       linhas: factura.linhas.map((linha) => ({
         id: novoId(),
         descricao: linha.descricao,
@@ -534,8 +565,9 @@ export function EditorRelatorio({
     const id = acrescentar(campos);
     // A document carries no payment method: that is the one thing still to
     // choose, so the card is brought into view with it focused.
-    focar(campos.metodoPagamentoId ? `registo-${id}` : `metodo-${id}`);
-    if (campos.metodoPagamentoId) agendar(id, 0);
+    const metodoEscolhido = campos.pagamentos[0]!.metodoPagamentoId !== "";
+    focar(metodoEscolhido ? `registo-${id}` : `metodo-${id}-0`);
+    if (metodoEscolhido) agendar(id, 0);
   }
 
   function remover(id: string) {
@@ -893,23 +925,37 @@ export function EditorRelatorio({
   const nomes = new Map(metodos.map((m) => [m.id, m.nome]));
 
   // Live totals, including records still being typed: the same sums the server
-  // will arrive at, computed from the same parsers.
+  // will arrive at, computed from the same parsers. A record is counted once
+  // every way it was paid has a method — until then there is no row of the
+  // table by method to put it in.
   const totais = calcularTotais(
     registos.flatMap((registo) => {
-      if (!registo.campos.metodoPagamentoId) return [];
-      const metodoPagamentoNome =
-        registo.base && registo.base.metodoPagamentoId === registo.campos.metodoPagamentoId
-          ? registo.base.metodoPagamentoNome
-          : (nomes.get(registo.campos.metodoPagamentoId) ?? "—");
+      const { campos } = registo;
+      if (campos.pagamentos.some((pagamento) => !pagamento.metodoPagamentoId)) return [];
+      const emEdicao = calcularEmEdicao(campos);
+      const { valores } = pagamentosEmEdicao(campos.pagamentos, emEdicao.registo.total);
 
-      return calcularEmEdicao(registo.campos).linhas.map(({ calculo, precos }) => ({
-        ...calculo,
-        tipo: registo.campos.tipo,
-        metodoPagamentoNome,
-        descontoCentimos: precos.descontoLinha,
-        descontoRegistoCentimos: precos.descontoRegisto,
-        valorCentimos: precos.total,
-      }));
+      return [
+        {
+          tipo: campos.tipo,
+          linhas: emEdicao.linhas.map(({ calculo, precos }) => ({
+            ...calculo,
+            descontoCentimos: precos.descontoLinha,
+            descontoRegistoCentimos: precos.descontoRegisto,
+            valorCentimos: precos.total,
+          })),
+          pagamentos: campos.pagamentos.map(({ metodoPagamentoId }, indice) => ({
+            // A method the record was saved with keeps the name it was saved
+            // under, as the server keeps it.
+            metodoPagamentoNome:
+              registo.base?.pagamentos.find((p) => p.metodoPagamentoId === metodoPagamentoId)
+                ?.metodoPagamentoNome ??
+              nomes.get(metodoPagamentoId) ??
+              "—",
+            valorCentimos: valores[indice]!,
+          })),
+        },
+      ];
     }),
   );
 

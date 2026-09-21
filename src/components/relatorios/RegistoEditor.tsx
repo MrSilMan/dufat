@@ -9,14 +9,28 @@ import {
   formatCentimos,
   formatCentimosNumero,
   parseDesconto,
+  parseValorCentimos,
   taxaIvaParaTexto,
   type LinhaCalculada,
 } from "@/lib/relatorios/dinheiro";
-import { ROTULO_CONTRAPARTE, ROTULO_TIPO, type TipoLinha } from "@/lib/relatorios/resumo";
+import {
+  ROTULO_CONTRAPARTE,
+  ROTULO_TIPO,
+  rotuloPagamento,
+  type PagamentoVista,
+  type TipoLinha,
+} from "@/lib/relatorios/resumo";
 import { pesquisarArtigos, pesquisarClientes } from "@/server/actions/relatorios-catalogo";
 import type { ArtigoEncontrado, ClienteEncontrado } from "@/lib/relatorios/catalogo";
-import { TAXA_NORMAL, calcularEmEdicao } from "./tiposEditor";
-import type { CamposLinha, CamposRegisto, EstadoRegisto, Metodo, Registo } from "./tiposEditor";
+import { TAXA_NORMAL, calcularEmEdicao, metodosRepetidos, pagamentosEmEdicao } from "./tiposEditor";
+import type {
+  CamposLinha,
+  CamposPagamento,
+  CamposRegisto,
+  EstadoRegisto,
+  Metodo,
+  Registo,
+} from "./tiposEditor";
 
 const TIPOS: TipoLinha[] = ["VENDA", "DESPESA"];
 
@@ -117,8 +131,11 @@ function avisoDesconto(
   return null;
 }
 
-/** "+ Desconto" — how a discount field looks until someone wants one. */
-function AbrirDesconto({
+/**
+ * "+ Desconto", "+ Pagamento misto" — how an optional part of the card looks
+ * until someone wants it.
+ */
+function AbrirOpcao({
   rotulo,
   bloqueado,
   onAbrir,
@@ -140,8 +157,8 @@ function AbrirDesconto({
   );
 }
 
-/** The ✕ that takes a discount off again. */
-function RemoverDesconto({
+/** The ✕ that takes a discount, or a way of paying, off again. */
+function BotaoRemover({
   rotulo,
   bloqueado,
   onRemover,
@@ -237,7 +254,7 @@ function DescontoDoArtigo({
             ? `−${formatCentimos(precos.descontoLinha)}${comIva ? " com IVA" : ""}`
             : null)}
       </span>
-      <RemoverDesconto rotulo="o desconto do artigo" bloqueado={bloqueado} onRemover={onRemover} />
+      <BotaoRemover rotulo="o desconto do artigo" bloqueado={bloqueado} onRemover={onRemover} />
     </div>
   );
 }
@@ -297,7 +314,7 @@ function ContaDoRegisto({
           className={cn(adminInputClass, campoDescontoClass, aviso && "border-rose-500/60")}
           placeholder="10% ou 500"
         />
-        <RemoverDesconto
+        <BotaoRemover
           rotulo="o desconto no total"
           bloqueado={bloqueado}
           onRemover={onRemover}
@@ -319,6 +336,285 @@ function ContaDoRegisto({
       <span className="mt-1 border-t border-a-line pt-2 text-right font-mono font-semibold tabular-nums text-a-text">
         {formatCentimos(total)}
       </span>
+    </div>
+  );
+}
+
+/**
+ * How the record was paid.
+ *
+ * One method is the usual case, and stays a plain select. "Pagamento misto"
+ * splits it: every way but the last is given the amount paid that way, and the
+ * last takes the rest of the total, shown rather than typed. "30 000 por
+ * transferência, o resto em numerário" is then one amount and two picks, and
+ * the split still adds up when an article is added after it was typed.
+ */
+function PagamentoDoRegisto({
+  registoId,
+  pagamentos,
+  metodos,
+  guardados,
+  total,
+  errors,
+  bloqueado,
+  onMudar,
+  onBlur,
+}: {
+  registoId: string;
+  pagamentos: CamposPagamento[];
+  /** Active methods, as the picker offers them. */
+  metodos: Metodo[];
+  /** How the saved copy was paid: a retired method keeps its name from here. */
+  guardados: readonly PagamentoVista[];
+  /** What the record comes to on screen, both discounts taken. */
+  total: number;
+  errors: Record<string, string[]> | undefined;
+  bloqueado: boolean;
+  onMudar: (pagamentos: CamposPagamento[], atraso?: number) => void;
+  onBlur: () => void;
+}) {
+  const idMetodo = (indice: number) => `metodo-${registoId}-${indice}`;
+  const idValor = (indice: number) => `pagamento-${registoId}-${indice}`;
+  const focar = (id: string) =>
+    requestAnimationFrame(() => document.getElementById(id)?.focus());
+
+  // The last way takes the rest, so whatever it held is dropped whenever a
+  // change makes a way the last one: an amount typed for it before must not
+  // come back if another way is added after it.
+  const mudar = (proximos: CamposPagamento[], atraso?: number) =>
+    onMudar(
+      proximos.map((pagamento, indice) =>
+        indice === proximos.length - 1 ? { ...pagamento, valor: "" } : pagamento,
+      ),
+      atraso,
+    );
+  const trocar = (indice: number, patch: Partial<CamposPagamento>, atraso?: number) =>
+    onMudar(
+      pagamentos.map((pagamento, outro) => (outro === indice ? { ...pagamento, ...patch } : pagamento)),
+      atraso,
+    );
+
+  const ativos = new Set(metodos.map((metodo) => metodo.id));
+  const opcoes = (indice: number) => {
+    const atual = pagamentos[indice]!.metodoPagamentoId;
+    // A method is paid with once per record: the ones other ways already use
+    // stay listed, so the choice is visible, but cannot be picked again.
+    const usados = new Set(
+      pagamentos.filter((_, outro) => outro !== indice).map((p) => p.metodoPagamentoId),
+    );
+    const retirado = atual !== "" && !ativos.has(atual);
+    return (
+      <>
+        <option value="" disabled>
+          Escolher…
+        </option>
+        {metodos.map((metodo) => (
+          <option key={metodo.id} value={metodo.id} disabled={usados.has(metodo.id)}>
+            {metodo.nome}
+          </option>
+        ))}
+        {retirado && (
+          <option value={atual}>
+            {guardados.find((g) => g.metodoPagamentoId === atual)?.metodoPagamentoNome ?? "Método"}{" "}
+            (desativado)
+          </option>
+        )}
+      </>
+    );
+  };
+
+  if (pagamentos.length === 1) {
+    return (
+      <AdminField
+        label="Método de pagamento"
+        htmlFor={idMetodo(0)}
+        errors={errors?.["pagamentos.0.metodoPagamentoId"] ?? errors?.pagamentos}
+      >
+        <select
+          id={idMetodo(0)}
+          value={pagamentos[0]!.metodoPagamentoId}
+          disabled={bloqueado}
+          onChange={(evento) => mudar([{ metodoPagamentoId: evento.target.value, valor: "" }], 0)}
+          className={adminInputClass}
+        >
+          {opcoes(0)}
+        </select>
+        {/* Splitting needs a second method to split with. */}
+        {metodos.length > 1 && (
+          <div className="mt-1">
+            <AbrirOpcao
+              rotulo="Pagamento misto"
+              bloqueado={bloqueado}
+              onAbrir={() => {
+                onMudar([
+                  { ...pagamentos[0]!, valor: "" },
+                  { metodoPagamentoId: "", valor: "" },
+                ]);
+                focar(idValor(0));
+              }}
+            />
+          </div>
+        )}
+      </AdminField>
+    );
+  }
+
+  const { resto } = pagamentosEmEdicao(pagamentos, total);
+  const repetidos = metodosRepetidos(pagamentos);
+  const digitado = pagamentos
+    .slice(0, -1)
+    .some((pagamento) => (parseValorCentimos(pagamento.valor) ?? 0) > 0);
+  // Only once an amount has been typed: a split just opened on a record with
+  // no articles yet has nothing to warn about.
+  const semResto = digitado && resto <= 0;
+  const aviso =
+    errors?.pagamentos?.[0] ??
+    (!semResto
+      ? null
+      : resto < 0
+        ? `Os valores passam o total em ${formatCentimos(-resto)}.`
+        : "Os valores já somam o total: não sobra nada para o último método.");
+  const livres = metodos.filter((metodo) => !pagamentos.some((p) => p.metodoPagamentoId === metodo.id));
+  const porEscolher = pagamentos.filter((pagamento) => !pagamento.metodoPagamentoId).length;
+  const rotuloId = `pagamento-${registoId}-rotulo`;
+
+  return (
+    // Given the card's whole width on a tablet, where half of it cannot hold a
+    // method's name beside an amount.
+    <div role="group" aria-labelledby={rotuloId} className="min-w-0 md:col-span-2 lg:col-span-1">
+      <div className="mb-1.5 flex items-baseline justify-between gap-3">
+        <span id={rotuloId} className="text-sm font-medium text-a-text">
+          Pagamento misto
+        </span>
+        <span className="font-mono text-xs tabular-nums text-a-muted">
+          Total {formatCentimos(total)}
+        </span>
+      </div>
+
+      <ul className="space-y-2">
+        {pagamentos.map((pagamento, indice) => {
+          const ultimo = indice === pagamentos.length - 1;
+          const repetido =
+            repetidos.has(pagamento.metodoPagamentoId) &&
+            pagamentos.findIndex((p) => p.metodoPagamentoId === pagamento.metodoPagamentoId) !==
+              indice;
+          const lido = parseValorCentimos(pagamento.valor);
+          const erro =
+            errors?.[`pagamentos.${indice}.metodoPagamentoId`]?.[0] ??
+            (repetido ? "Este método já foi escolhido." : undefined) ??
+            errors?.[`pagamentos.${indice}.valor`]?.[0] ??
+            (!ultimo && pagamento.valor.trim() && !(lido !== null && lido > 0)
+              ? "Valor inválido (ex.: 30 000,00)."
+              : undefined);
+
+          return (
+            // On a phone the method takes the full width and its amount sits
+            // under it, so each pair gets a box of its own: stacked without
+            // one, an amount reads as belonging to the method below it just
+            // as well as to the one above. From a small tablet up they share
+            // a row, and the row is the grouping.
+            <li
+              key={indice}
+              className="max-sm:rounded-xl max-sm:border max-sm:border-a-line max-sm:bg-a-surface-2/40 max-sm:p-2.5"
+            >
+              <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_9rem_auto]">
+                <select
+                  id={idMetodo(indice)}
+                  aria-label={`Método ${indice + 1}`}
+                  value={pagamento.metodoPagamentoId}
+                  disabled={bloqueado}
+                  onChange={(evento) =>
+                    trocar(indice, { metodoPagamentoId: evento.target.value }, 0)
+                  }
+                  aria-invalid={erro ? true : undefined}
+                  className={cn(adminInputClass, "col-span-2 sm:col-span-1", erro && "border-rose-500/60")}
+                >
+                  {opcoes(indice)}
+                </select>
+
+                {ultimo ? (
+                  // What is left of the total, worked out rather than typed.
+                  <div
+                    id={idValor(indice)}
+                    aria-live="polite"
+                    className="flex min-h-11 flex-col items-end justify-center rounded-xl border border-dashed border-a-line px-3 py-1"
+                  >
+                    <span className="text-[0.65rem] font-semibold uppercase leading-none tracking-wider text-a-faint">
+                      O resto
+                    </span>
+                    <span
+                      className={cn(
+                        "mt-1 font-mono text-sm leading-none tabular-nums",
+                        semResto ? "text-rose-500" : "text-a-text",
+                      )}
+                    >
+                      {semResto ? "—" : formatCentimosNumero(Math.max(resto, 0))}
+                    </span>
+                  </div>
+                ) : (
+                  <input
+                    id={idValor(indice)}
+                    aria-label={`Valor pago com o método ${indice + 1}`}
+                    value={pagamento.valor}
+                    inputMode="decimal"
+                    autoComplete="off"
+                    maxLength={32}
+                    disabled={bloqueado}
+                    onChange={(evento) => trocar(indice, { valor: evento.target.value })}
+                    onBlur={onBlur}
+                    aria-invalid={erro ? true : undefined}
+                    className={cn(
+                      adminInputClass,
+                      "text-right font-mono tabular-nums",
+                      erro && "border-rose-500/60",
+                    )}
+                    placeholder="0,00"
+                  />
+                )}
+
+                <BotaoRemover
+                  rotulo={`o método ${indice + 1}`}
+                  bloqueado={bloqueado}
+                  onRemover={() =>
+                    mudar(
+                      pagamentos.filter((_, outro) => outro !== indice),
+                      0,
+                    )
+                  }
+                />
+              </div>
+              {erro && (
+                <p role="alert" className="mt-1 text-xs text-rose-500">
+                  {erro}
+                </p>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+
+      <div className="mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        {livres.length > porEscolher && (
+          <AbrirOpcao
+            rotulo="Outro método"
+            bloqueado={bloqueado}
+            onAbrir={() => {
+              // In before the last, which goes on taking the rest.
+              onMudar([
+                ...pagamentos.slice(0, -1),
+                { metodoPagamentoId: "", valor: "" },
+                pagamentos[pagamentos.length - 1]!,
+              ]);
+              focar(idMetodo(pagamentos.length - 1));
+            }}
+          />
+        )}
+        {aviso && (
+          <p role="alert" className="text-xs text-rose-500">
+            {aviso}
+          </p>
+        )}
+      </div>
     </div>
   );
 }
@@ -377,7 +673,6 @@ export function RegistoEditor({
   const { campos, estado } = registo;
   const rotulo = ROTULO_ESTADO[estado];
   const venda = campos.tipo === "VENDA";
-  const metodoRetirado = campos.metodoPagamentoId !== "" && !nomes.has(campos.metodoPagamentoId);
   const calculo = calcularEmEdicao(campos);
   const total = calculo.registo.total;
 
@@ -399,8 +694,17 @@ export function RegistoEditor({
     requestAnimationFrame(() => document.getElementById(id)?.focus());
   const erroLinha = (linhaId: string, campo: string) =>
     registo.errors?.[`linhas.${linhaId}.${campo}`];
+  // Names only, for the closed row: the amounts of a split are in the card.
   const metodoNome =
-    nomes.get(campos.metodoPagamentoId) ?? registo.base?.metodoPagamentoNome ?? null;
+    campos.pagamentos
+      .map(
+        ({ metodoPagamentoId }) =>
+          nomes.get(metodoPagamentoId) ??
+          registo.base?.pagamentos.find((p) => p.metodoPagamentoId === metodoPagamentoId)
+            ?.metodoPagamentoNome,
+      )
+      .filter(Boolean)
+      .join(" + ") || null;
   const corpoId = `corpo-${registo.id}`;
 
   const valor = (
@@ -606,33 +910,17 @@ export function RegistoEditor({
               />
             </AdminField>
 
-            <AdminField
-              label="Método de pagamento"
-              htmlFor={`metodo-${registo.id}`}
-              errors={registo.errors?.metodoPagamentoId}
-            >
-              <select
-                id={`metodo-${registo.id}`}
-                value={campos.metodoPagamentoId}
-                disabled={bloqueado}
-                onChange={(evento) => onEditar({ metodoPagamentoId: evento.target.value }, 0)}
-                className={adminInputClass}
-              >
-                <option value="" disabled>
-                  Escolher…
-                </option>
-                {metodos.map((metodo) => (
-                  <option key={metodo.id} value={metodo.id}>
-                    {metodo.nome}
-                  </option>
-                ))}
-                {metodoRetirado && (
-                  <option value={campos.metodoPagamentoId}>
-                    {registo.base?.metodoPagamentoNome ?? "Método"} (desativado)
-                  </option>
-                )}
-              </select>
-            </AdminField>
+            <PagamentoDoRegisto
+              registoId={registo.id}
+              pagamentos={campos.pagamentos}
+              metodos={metodos}
+              guardados={registo.base?.pagamentos ?? []}
+              total={total}
+              errors={registo.errors}
+              bloqueado={bloqueado}
+              onMudar={(pagamentos, atraso) => onEditar({ pagamentos }, atraso)}
+              onBlur={onBlur}
+            />
           </div>
 
           {campos.facturaCodigo && (
@@ -865,7 +1153,7 @@ export function RegistoEditor({
                     />
                   ) : (
                     <div className="mt-1">
-                      <AbrirDesconto
+                      <AbrirOpcao
                         rotulo="Desconto"
                         bloqueado={bloqueado}
                         onAbrir={() => {
@@ -910,7 +1198,7 @@ export function RegistoEditor({
                   }}
                 />
               ) : (
-                <AbrirDesconto
+                <AbrirOpcao
                   rotulo="Desconto no total"
                   bloqueado={bloqueado}
                   onAbrir={() => {
@@ -971,7 +1259,7 @@ export function RegistoEditor({
                   {formatCentimos(
                     registo.atual.linhas.reduce((soma, linha) => soma + linha.valorCentimos, 0),
                   )}{" "}
-                  · {registo.atual.metodoPagamentoNome}
+                  · {rotuloPagamento(registo.atual.pagamentos)}
                 </p>
               )}
               <div className="mt-3 flex flex-wrap gap-2">

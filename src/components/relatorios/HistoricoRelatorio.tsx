@@ -1,6 +1,6 @@
 import { formatCentimos, quantidadeMilParaTexto } from "@/lib/relatorios/dinheiro";
 import { formatDataHoraLuanda } from "@/lib/relatorios/dia";
-import { ROTULO_TIPO, type TipoLinha } from "@/lib/relatorios/resumo";
+import { ROTULO_TIPO, rotuloPagamento, type TipoLinha } from "@/lib/relatorios/resumo";
 
 type Entrada = {
   id: string;
@@ -18,7 +18,10 @@ type InstantaneoRegisto = {
   clienteNome: string | null;
   clienteNif: string | null;
   facturaCodigo: string | null;
-  metodoPagamentoNome: string;
+  /** How it was paid, one entry per method; absent from rows written before splits existed… */
+  pagamentos?: { metodoPagamentoNome: string; valorCentimos: number }[];
+  /** …which carry the one method's name instead. */
+  metodoPagamentoNome?: string;
   nota: string | null;
   /** "5%" or "1 500,00 Kz"; absent from rows written before discounts existed. */
   desconto?: string | null;
@@ -90,13 +93,20 @@ function comoRegisto(valor: unknown): InstantaneoRegisto | null {
   return null;
 }
 
+/** "Numerário", or "Transferência 30 000,00 Kz + Numerário 25 000,00 Kz" for a split. */
+function pagamentoDe(registo: InstantaneoRegisto): string {
+  return Array.isArray(registo.pagamentos) && registo.pagamentos.length > 0
+    ? rotuloPagamento(registo.pagamentos)
+    : (registo.metodoPagamentoNome ?? "—");
+}
+
 function resumoRegisto(registo: InstantaneoRegisto): string {
   const partes = [ROTULO_TIPO[registo.tipo] ?? registo.tipo];
   if (registo.clienteNome) partes.push(registo.clienteNome);
   partes.push(`${registo.linhas.length} artigo(s)`);
   if (registo.desconto) partes.push(`desconto no total ${registo.desconto}`);
   partes.push(formatCentimos(registo.total));
-  partes.push(registo.metodoPagamentoNome);
+  partes.push(pagamentoDe(registo));
   if (registo.facturaCodigo) partes.push(registo.facturaCodigo);
   return partes.join(" · ");
 }
@@ -124,7 +134,7 @@ function diferencas(antes: InstantaneoRegisto, depois: InstantaneoRegisto): stri
   comparar("Cliente", antes.clienteNome, depois.clienteNome);
   comparar("NIF", antes.clienteNif, depois.clienteNif);
   comparar("Documento", antes.facturaCodigo, depois.facturaCodigo);
-  comparar("Método", antes.metodoPagamentoNome, depois.metodoPagamentoNome);
+  comparar("Pagamento", pagamentoDe(antes), pagamentoDe(depois));
   comparar("Nota", antes.nota, depois.nota);
   comparar("Desconto no total", antes.desconto ?? null, depois.desconto ?? null);
 

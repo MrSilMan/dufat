@@ -17,7 +17,7 @@ export default async function MetodosPagamentoPage() {
 
   const metodos = await prisma.metodoPagamento.findMany({
     orderBy: [{ ativo: "desc" }, { sortOrder: "asc" }, { nome: "asc" }],
-    select: { id: true, nome: true, ativo: true, _count: { select: { linhas: true } } },
+    select: { id: true, nome: true, ativo: true, _count: { select: { pagamentos: true } } },
   });
 
   const semAtivos = metodos.every((m) => !m.ativo);
@@ -43,7 +43,7 @@ export default async function MetodosPagamentoPage() {
 
       <OrganizacaoSecao
         titulo="Métodos"
-        descricao="Desativar um método tira-o da lista para novas linhas; os relatórios que já o usaram continuam a mostrá-lo. Mudar o nome não altera as linhas já guardadas."
+        descricao="Desativar um método tira-o da lista para novos registos; os relatórios que já o usaram continuam a mostrá-lo. Mudar o nome não altera os registos já guardados."
         tipo="metodo"
         rotuloNome="método"
         genero="m"
@@ -54,7 +54,7 @@ export default async function MetodosPagamentoPage() {
           id: m.id,
           nome: m.nome,
           ativo: m.ativo,
-          detalhe: `Usado em ${m._count.linhas} linha(s)`,
+          detalhe: `Usado em ${m._count.pagamentos} registo(s)`,
         }))}
       />
     </div>

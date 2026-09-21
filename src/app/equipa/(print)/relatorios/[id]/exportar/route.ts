@@ -8,7 +8,12 @@ import {
   quantidadeMilParaTexto,
 } from "@/lib/relatorios/dinheiro";
 import { formatDataHoraLuanda } from "@/lib/relatorios/dia";
-import { ROTULO_TIPO, calcularTotais, rotuloIvaDaLinha } from "@/lib/relatorios/resumo";
+import {
+  ROTULO_TIPO,
+  calcularTotais,
+  rotuloIvaDaLinha,
+  rotuloPagamento,
+} from "@/lib/relatorios/resumo";
 import { carregarRelatorio } from "@/lib/relatorios/queries";
 import { podeVerRelatorio, resolverAcesso } from "@/lib/relatorios/acesso";
 
@@ -69,7 +74,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: "Relatório não encontrado." }, { status: 404 });
   }
 
-  const totais = calcularTotais(relatorio.linhas);
+  const totais = calcularTotais(relatorio.registos);
   const ordenados = [...relatorio.registos].sort((a, b) =>
     a.tipo === b.tipo ? 0 : a.tipo === "VENDA" ? -1 : 1,
   );
@@ -133,7 +138,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
           rotuloIvaDaLinha(l) ?? "",
           centimosParaTexto(calcularLinha(l, l.descontoRegistoCentimos).iva),
           centimosParaTexto(l.valorCentimos),
-          textoSeguro(registo.metodoPagamentoNome),
+          // A split payment is the record's, not the article's: every row of
+          // the record says how the whole of it was paid, like the client.
+          // The per-method block below is where the amounts add up.
+          textoSeguro(rotuloPagamento(registo.pagamentos, centimosParaTexto)),
           textoSeguro(registo.nota ?? ""),
         ),
       ),

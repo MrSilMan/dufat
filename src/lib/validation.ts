@@ -726,6 +726,20 @@ export const linhaRegistoSchema = z.object({
 const MAX_LINHAS_REGISTO = 100;
 
 /**
+ * One way a record was paid. Every way but the last carries the amount typed
+ * for it, parsed on the server like a price. The last takes the rest of the
+ * total, so its `valor` is null: the server works it out from the lines, as
+ * the editor does, rather than trusting a figure that could disagree with them.
+ */
+export const pagamentoRegistoSchema = z.object({
+  metodoPagamentoId: z.string().min(1, "Escolha o método de pagamento"),
+  valor: z.string().trim().max(32, "Valor demasiado longo").nullable(),
+});
+
+/** Far more ways than anyone splits one bill over. */
+const MAX_PAGAMENTOS_REGISTO = 10;
+
+/**
  * One autosaved record: who it was for, how it was paid, and its lines — all
  * written together, so a sale of three articles is never half-stored.
  *
@@ -744,7 +758,11 @@ export const registoRelatorioSchema = z.object({
   nota: textoOpcional(300, "Nota demasiado longa (máx. 300 caracteres)"),
   /** On the whole bill, typed like an article's. */
   desconto: descontoTexto,
-  metodoPagamentoId: z.string().min(1, "Escolha o método de pagamento"),
+  /** One entry when it was paid one way; one per method when it was split. */
+  pagamentos: z
+    .array(pagamentoRegistoSchema)
+    .min(1, "Escolha o método de pagamento")
+    .max(MAX_PAGAMENTOS_REGISTO, `Máximo de ${MAX_PAGAMENTOS_REGISTO} métodos por registo`),
   linhas: z
     .array(linhaRegistoSchema)
     .min(1, "Adicione pelo menos um artigo")

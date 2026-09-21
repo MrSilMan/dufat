@@ -87,7 +87,7 @@ export default async function RelatorioPage({ params }: { params: Promise<{ id: 
             </div>
           </div>
           <TabelaRegistos registos={relatorio.registos} />
-          <ResumoRelatorio totais={calcularTotais(relatorio.linhas)} />
+          <ResumoRelatorio totais={calcularTotais(relatorio.registos)} />
         </>
       )}
     </div>

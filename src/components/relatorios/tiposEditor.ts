@@ -8,6 +8,7 @@ import {
   parseQuantidadeMil,
   parseValorCentimos,
   quantidadeMilParaTexto,
+  repartirPagamento,
   MAX_CENTIMOS,
   type Desconto,
   type LinhaCalculada,
@@ -53,6 +54,16 @@ export type CamposLinha = {
   artigoCodigo: string;
 };
 
+/**
+ * One way the record was paid. `valor` is the amount typed for it, on every
+ * way but the last; the last takes whatever of the total is left, and what
+ * its `valor` holds is never read.
+ */
+export type CamposPagamento = {
+  metodoPagamentoId: string;
+  valor: string;
+};
+
 export type CamposRegisto = {
   tipo: TipoLinha;
   clienteNome: string;
@@ -63,7 +74,8 @@ export type CamposRegisto = {
   nota: string;
   /** The discount on the whole bill, typed like an article's. */
   desconto: string;
-  metodoPagamentoId: string;
+  /** Never empty: one entry when it was paid one way, one per method when split. */
+  pagamentos: CamposPagamento[];
   linhas: CamposLinha[];
 };
 
@@ -84,7 +96,10 @@ export type Registo = {
   campos: CamposRegisto;
   estado: EstadoRegisto;
   mensagem?: string;
-  /** Keyed by field, and `linhas.<id>.<campo>` for a line's own. */
+  /**
+   * Keyed by field, `linhas.<id>.<campo>` for a line's own, and
+   * `pagamentos.<posição>.<campo>` for a payment's.
+   */
   errors?: Record<string, string[]>;
   /** In the "conflito" state: the record as the server has it, or null if deleted. */
   atual?: RegistoVista | null;
@@ -130,7 +145,7 @@ export function registoVazio(tipo: TipoLinha, metodoPagamentoId: string): Campos
     facturaCodigo: "",
     nota: "",
     desconto: "",
-    metodoPagamentoId,
+    pagamentos: [{ metodoPagamentoId, valor: "" }],
     linhas: [linhaVazia()],
   };
 }
@@ -146,7 +161,11 @@ export function camposDe(registo: RegistoVista): CamposRegisto {
     facturaCodigo: registo.facturaCodigo ?? "",
     nota: registo.nota ?? "",
     desconto: descontoParaTexto(registo.desconto),
-    metodoPagamentoId: registo.metodoPagamentoId,
+    pagamentos: registo.pagamentos.map((pagamento, indice, todos) => ({
+      metodoPagamentoId: pagamento.metodoPagamentoId,
+      // The last one's amount is the rest of the total, not something typed.
+      valor: indice < todos.length - 1 ? centimosParaTexto(pagamento.valorCentimos) : "",
+    })),
     linhas: registo.linhas.map((linha) => ({
       id: linha.id,
       descricao: linha.descricao,
@@ -185,11 +204,22 @@ export function iguais(campos: CamposRegisto, base: RegistoVista): boolean {
     opcional(campos.facturaCodigo) !== base.facturaCodigo ||
     opcional(campos.nota) !== base.nota ||
     !mesmoDescontoTexto(campos.desconto, base.desconto) ||
-    campos.metodoPagamentoId !== base.metodoPagamentoId ||
+    campos.pagamentos.length !== base.pagamentos.length ||
     campos.linhas.length !== base.linhas.length
   ) {
     return false;
   }
+
+  // The last payment's amount follows from the lines, which are compared below.
+  const mesmosPagamentos = campos.pagamentos.every((pagamento, indice) => {
+    const guardado = base.pagamentos[indice]!;
+    return (
+      pagamento.metodoPagamentoId === guardado.metodoPagamentoId &&
+      (indice === campos.pagamentos.length - 1 ||
+        parseValorCentimos(pagamento.valor) === guardado.valorCentimos)
+    );
+  });
+  if (!mesmosPagamentos) return false;
 
   return campos.linhas.every((linha, indice) => {
     const guardada = base.linhas[indice]!;
@@ -245,12 +275,42 @@ function linhaParaCalculo(linha: CamposLinha): LinhaParaCalculo | null {
 }
 
 /**
+ * The amounts typed for every way of paying but the last, or null while one
+ * of them does not read or is nothing.
+ */
+function parciaisDoPagamento(campos: CamposRegisto): number[] | null {
+  const parciais: number[] = [];
+  for (const pagamento of campos.pagamentos.slice(0, -1)) {
+    const valor = parseValorCentimos(pagamento.valor);
+    if (valor === null || valor <= 0) return null;
+    parciais.push(valor);
+  }
+  return parciais;
+}
+
+/** A method chosen for more than one way of paying the same record. */
+export function metodosRepetidos(pagamentos: readonly CamposPagamento[]): Set<string> {
+  const vistos = new Set<string>();
+  const repetidos = new Set<string>();
+  for (const { metodoPagamentoId } of pagamentos) {
+    if (metodoPagamentoId && vistos.has(metodoPagamentoId)) repetidos.add(metodoPagamentoId);
+    vistos.add(metodoPagamentoId);
+  }
+  return repetidos;
+}
+
+/**
  * Enough to be worth sending: every line readable, its discount too and no
- * larger than the article, the bill's discount no larger than the bill, and a
- * method chosen. The server checks the same things, with the same functions.
+ * larger than the article, the bill's discount no larger than the bill, every
+ * way of paying given a method of its own, and a split that leaves the last
+ * way something. The server checks the same things, with the same functions.
  */
 export function completo(campos: CamposRegisto): boolean {
-  if (campos.metodoPagamentoId === "" || campos.linhas.length === 0) return false;
+  if (campos.linhas.length === 0 || campos.pagamentos.length === 0) return false;
+  if (campos.pagamentos.some((pagamento) => pagamento.metodoPagamentoId === "")) return false;
+  if (metodosRepetidos(campos.pagamentos).size > 0) return false;
+  const parciais = parciaisDoPagamento(campos);
+  if (!parciais) return false;
 
   const linhas: LinhaParaCalculo[] = [];
   for (const linha of campos.linhas) {
@@ -264,8 +324,9 @@ export function completo(campos: CamposRegisto): boolean {
 
   const desconto = parseDesconto(campos.desconto);
   if (desconto === "invalido") return false;
-  const { subtotal } = calcularRegisto(linhas, desconto);
+  const { subtotal, total } = calcularRegisto(linhas, desconto);
   if (desconto?.tipo === "VALOR" && desconto.centimos > subtotal) return false;
+  if (parciais.length > 0 && repartirPagamento(total, parciais).resto <= 0) return false;
   return subtotal <= MAX_CENTIMOS;
 }
 
@@ -308,6 +369,35 @@ export function calcularEmEdicao(campos: CamposRegisto): {
   return { registo, linhas, porId: new Map(linhas.map((linha) => [linha.id, linha.precos])) };
 }
 
+/**
+ * The payments as they stand on screen, for a record whose total is `total`:
+ * every way but the last for what was typed, and the last for what is left.
+ *
+ * An amount that does not read yet counts as nothing, and none is taken past
+ * what is left of the total, so the live totals by method add up to the record
+ * while someone is still typing. `resto` is the last way's share before that
+ * capping: below zero when the amounts typed pass the total, which is what the
+ * card warns about.
+ */
+export function pagamentosEmEdicao(
+  pagamentos: readonly CamposPagamento[],
+  total: number,
+): { valores: number[]; resto: number } {
+  const parciais = pagamentos
+    .slice(0, -1)
+    .map((pagamento) => parseValorCentimos(pagamento.valor) ?? 0);
+  const { resto } = repartirPagamento(total, parciais);
+
+  let falta = total;
+  const valores = parciais.map((valor) => {
+    const parte = Math.min(valor, Math.max(falta, 0));
+    falta -= parte;
+    return parte;
+  });
+  valores.push(Math.max(falta, 0));
+  return { valores, resto };
+}
+
 /** What goes over the wire — `null` where the form holds "". */
 export function paraEnviar(campos: CamposRegisto) {
   const opcional = (valor: string) => valor.trim() || null;
@@ -320,7 +410,11 @@ export function paraEnviar(campos: CamposRegisto) {
     facturaCodigo: opcional(campos.facturaCodigo),
     nota: opcional(campos.nota),
     desconto: campos.desconto,
-    metodoPagamentoId: campos.metodoPagamentoId,
+    pagamentos: campos.pagamentos.map((pagamento, indice, todos) => ({
+      metodoPagamentoId: pagamento.metodoPagamentoId,
+      // The last one is the rest: the server works it out from the lines.
+      valor: indice < todos.length - 1 ? pagamento.valor : null,
+    })),
     linhas: campos.linhas.map((linha) => ({
       id: linha.id,
       descricao: linha.descricao,

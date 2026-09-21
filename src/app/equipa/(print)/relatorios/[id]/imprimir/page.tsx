@@ -13,6 +13,7 @@ import {
   rotuloDescontoDaLinha,
   rotuloDescontoDoRegisto,
   rotuloIvaDaLinha,
+  rotuloPagamento,
   totalDoRegisto,
   valorDaLinha,
   type RegistoVista,
@@ -46,7 +47,7 @@ export default async function ImprimirRelatorioPage({
   ]);
   if (!relatorio || !podeVerRelatorio(session, acesso, relatorio.autorId)) notFound();
 
-  const totais = calcularTotais(relatorio.linhas);
+  const totais = calcularTotais(relatorio.registos);
   const vendas = relatorio.registos.filter((r) => r.tipo === "VENDA");
   const despesas = relatorio.registos.filter((r) => r.tipo === "DESPESA");
   const finalizado = relatorio.estado === "FINALIZADO";
@@ -217,7 +218,7 @@ function Seccao({
                       </strong>
                       <span className="text-ink-soft">
                         {" "}
-                        · {registo.metodoPagamentoNome}
+                        · {rotuloPagamento(registo.pagamentos)}
                         {registo.clienteNif ? ` · NIF ${registo.clienteNif}` : ""}
                         {registo.facturaCodigo ? ` · ${registo.facturaCodigo}` : ""}
                       </span>

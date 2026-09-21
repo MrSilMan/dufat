@@ -52,7 +52,7 @@ export function DetalheRelatorio({
       <div className="grid items-start gap-8 2xl:grid-cols-[minmax(0,1fr)_24rem]">
         <div className="space-y-6">
           <TabelaRegistos registos={relatorio.registos} />
-          <ResumoRelatorio totais={calcularTotais(relatorio.linhas)} />
+          <ResumoRelatorio totais={calcularTotais(relatorio.registos)} />
           {acoes}
         </div>
 

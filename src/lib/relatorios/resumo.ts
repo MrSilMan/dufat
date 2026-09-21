@@ -56,9 +56,18 @@ export type LinhaVista = {
   valorCentimos: number;
   artigoInvgestId: string | null;
   artigoCodigo: string | null;
-  metodoPagamentoId: string;
-  metodoPagamentoNome: string;
   ordem: number;
+};
+
+/**
+ * One way a record was paid and how much of it went that way. A record paid
+ * one way has one, for its whole total; a split payment has one per method.
+ */
+export type PagamentoVista = {
+  metodoPagamentoId: string;
+  /** The method's name when the record was saved, kept if it is renamed later. */
+  metodoPagamentoNome: string;
+  valorCentimos: number;
 };
 
 /**
@@ -76,13 +85,16 @@ export type RegistoVista = {
   clienteInvgestId: string | null;
   facturaInvgestId: string | null;
   facturaCodigo: string | null;
-  metodoPagamentoId: string;
-  metodoPagamentoNome: string;
   nota: string | null;
   /** The discount on the whole bill as it was given; null when there is none. */
   desconto: Desconto | null;
   versao: number;
   linhas: LinhaVista[];
+  /**
+   * In order, never empty, adding up to the record's total. The last is the
+   * one that took the rest — see `repartirPagamento`.
+   */
+  pagamentos: PagamentoVista[];
 };
 
 /** A record's own total — the sum of its lines, its discount already taken. */
@@ -135,9 +147,7 @@ export type Totais = {
 
 type LinhaParaTotal = Pick<
   LinhaVista,
-  | "tipo"
   | "valorCentimos"
-  | "metodoPagamentoNome"
   | "quantidadeMil"
   | "precoUnitarioCentimos"
   | "taxaIvaCentesimos"
@@ -147,7 +157,19 @@ type LinhaParaTotal = Pick<
   | "descontoRegistoCentimos"
 >;
 
-export function calcularTotais(linhas: readonly LinhaParaTotal[]): Totais {
+type RegistoParaTotal = {
+  tipo: TipoLinha;
+  linhas: readonly LinhaParaTotal[];
+  pagamentos: readonly Pick<PagamentoVista, "metodoPagamentoNome" | "valorCentimos">[];
+};
+
+/**
+ * The day's figures. Sales, expenses, their IVA and their discounts are added
+ * up from the lines; the split by method from the payments, since a record
+ * paid partly by transfer and partly in cash belongs to both, each for what
+ * was paid its way.
+ */
+export function calcularTotais(registos: readonly RegistoParaTotal[]): Totais {
   const metodos = new Map<string, TotalMetodo>();
   let vendas = 0;
   let despesas = 0;
@@ -158,32 +180,39 @@ export function calcularTotais(linhas: readonly LinhaParaTotal[]): Totais {
   let numVendas = 0;
   let numDespesas = 0;
 
-  for (const linha of linhas) {
-    // The line's share of its record's discount is stored with it, so its
-    // IVA comes out as it did when the record was saved.
-    const { iva } = calcularLinha(linha, linha.descontoRegistoCentimos);
-    const desconto = linha.descontoCentimos + linha.descontoRegistoCentimos;
-    const metodo = metodos.get(linha.metodoPagamentoNome) ?? {
-      nome: linha.metodoPagamentoNome,
-      vendas: 0,
-      despesas: 0,
-      saldo: 0,
-    };
-    if (linha.tipo === "VENDA") {
-      vendas += linha.valorCentimos;
-      ivaVendas += iva;
-      descontosVendas += desconto;
-      metodo.vendas += linha.valorCentimos;
-      numVendas += 1;
-    } else {
-      despesas += linha.valorCentimos;
-      ivaDespesas += iva;
-      descontosDespesas += desconto;
-      metodo.despesas += linha.valorCentimos;
-      numDespesas += 1;
+  for (const registo of registos) {
+    const venda = registo.tipo === "VENDA";
+
+    for (const linha of registo.linhas) {
+      // The line's share of its record's discount is stored with it, so its
+      // IVA comes out as it did when the record was saved.
+      const { iva } = calcularLinha(linha, linha.descontoRegistoCentimos);
+      const desconto = linha.descontoCentimos + linha.descontoRegistoCentimos;
+      if (venda) {
+        vendas += linha.valorCentimos;
+        ivaVendas += iva;
+        descontosVendas += desconto;
+        numVendas += 1;
+      } else {
+        despesas += linha.valorCentimos;
+        ivaDespesas += iva;
+        descontosDespesas += desconto;
+        numDespesas += 1;
+      }
     }
-    metodo.saldo = metodo.vendas - metodo.despesas;
-    metodos.set(linha.metodoPagamentoNome, metodo);
+
+    for (const pagamento of registo.pagamentos) {
+      const metodo = metodos.get(pagamento.metodoPagamentoNome) ?? {
+        nome: pagamento.metodoPagamentoNome,
+        vendas: 0,
+        despesas: 0,
+        saldo: 0,
+      };
+      if (venda) metodo.vendas += pagamento.valorCentimos;
+      else metodo.despesas += pagamento.valorCentimos;
+      metodo.saldo = metodo.vendas - metodo.despesas;
+      metodos.set(pagamento.metodoPagamentoNome, metodo);
+    }
   }
 
   return {
@@ -249,4 +278,20 @@ export function rotuloDescontoDoRegisto(registo: Pick<RegistoVista, "desconto">)
   return registo.desconto?.tipo === "PERCENTAGEM"
     ? `Desconto no total (${rotuloDesconto(registo.desconto)})`
     : "Desconto no total";
+}
+
+/**
+ * How a record was paid, as one line of text: the method's name when it was
+ * paid one way, and each method with its amount when the payment was split —
+ * "Transferência 30 000,00 Kz + Numerário 25 000,00 Kz".
+ */
+export function rotuloPagamento(
+  pagamentos: readonly Pick<PagamentoVista, "metodoPagamentoNome" | "valorCentimos">[],
+  formatar: (centimos: number) => string = formatCentimos,
+): string {
+  if (pagamentos.length === 0) return "—";
+  if (pagamentos.length === 1) return pagamentos[0]!.metodoPagamentoNome;
+  return pagamentos
+    .map((pagamento) => `${pagamento.metodoPagamentoNome} ${formatar(pagamento.valorCentimos)}`)
+    .join(" + ");
 }

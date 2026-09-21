@@ -11,6 +11,7 @@ import {
   rotuloDescontoDaLinha,
   rotuloDescontoDoRegisto,
   rotuloIvaDaLinha,
+  rotuloPagamento,
   totalDoRegisto,
   valorDaLinha,
   type LinhaVista,
@@ -250,7 +251,7 @@ export function TabelaRegistos({ registos }: { registos: readonly RegistoVista[]
             </ul>
 
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-a-line px-4 py-2.5 text-xs text-a-muted sm:px-5">
-              <span>{registo.metodoPagamentoNome}</span>
+              <span>{rotuloPagamento(registo.pagamentos)}</span>
               {registo.clienteNif && <span>NIF {registo.clienteNif}</span>}
               {registo.facturaCodigo && <span>Documento {registo.facturaCodigo}</span>}
               {registo.nota && <span className="min-w-0 truncate italic">{registo.nota}</span>}

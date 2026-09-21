@@ -16,6 +16,7 @@ import {
   parseDesconto,
   parseQuantidadeMil,
   parseValorCentimos,
+  repartirPagamento,
   MAX_CENTIMOS,
   type Desconto,
   type LinhaParaCalculo,
@@ -26,16 +27,11 @@ import {
   descontoDoRegisto,
   rotuloDesconto,
   totalDoRegisto,
+  type PagamentoVista,
   type RegistoVista,
   type TipoLinha,
 } from "@/lib/relatorios/resumo";
-import {
-  SELECT_LINHA,
-  SELECT_REGISTO,
-  colunasDoDesconto,
-  vistaLinha,
-  vistaRegisto,
-} from "@/lib/relatorios/queries";
+import { SELECT_REGISTO, colunasDoDesconto, vistaRegisto } from "@/lib/relatorios/queries";
 import { acessoRelatorios, podeVerRelatorio } from "@/lib/relatorios/acesso";
 import {
   abrirRelatorioSchema,
@@ -142,8 +138,14 @@ function instantaneo(registo: RegistoVista): Prisma.InputJsonObject {
     clienteNome: registo.clienteNome,
     clienteNif: registo.clienteNif,
     facturaCodigo: registo.facturaCodigo,
-    metodoPagamentoId: registo.metodoPagamentoId,
-    metodoPagamentoNome: registo.metodoPagamentoNome,
+    // With the names they were saved under, so a split reads back without the
+    // methods table. Rows written before splits existed carry a single
+    // `metodoPagamentoNome` instead; the history reads both.
+    pagamentos: registo.pagamentos.map((pagamento) => ({
+      metodoPagamentoId: pagamento.metodoPagamentoId,
+      metodoPagamentoNome: pagamento.metodoPagamentoNome,
+      valorCentimos: pagamento.valorCentimos,
+    })),
     nota: registo.nota,
     // As a person reads them — "10%", "1 500,00 Kz" — since that is all the
     // history ever does with them.
@@ -202,22 +204,41 @@ async function avancarVersao(tx: Tx, relatorioId: string): Promise<number> {
   return versao;
 }
 
-/** A method chosen for a line must still be offered. */
-async function metodoAtivo(tx: Tx, id: string) {
-  const metodo = await tx.metodoPagamento.findUnique({
-    where: { id },
-    select: { nome: true, ativo: true },
-  });
-  if (!metodo?.ativo) {
-    const message = "Este método de pagamento já não está disponível. Escolha outro.";
-    throw new Recusa({
-      ok: false,
-      codigo: "VALIDACAO",
-      message,
-      errors: { metodoPagamentoId: [message] },
+/**
+ * The name each way of paying is recorded under. A method the record already
+ * had keeps the name it was saved with, even if it has since been retired or
+ * renamed; only a newly chosen method must still be offered.
+ */
+async function nomesDosMetodos(
+  tx: Tx,
+  pagamentos: RegistoPreparado["pagamentos"],
+  anteriores: readonly PagamentoVista[],
+): Promise<string[]> {
+  const nomes: string[] = [];
+  for (const [indice, pagamento] of pagamentos.entries()) {
+    const anterior = anteriores.find(
+      (outro) => outro.metodoPagamentoId === pagamento.metodoPagamentoId,
+    );
+    if (anterior) {
+      nomes.push(anterior.metodoPagamentoNome);
+      continue;
+    }
+    const metodo = await tx.metodoPagamento.findUnique({
+      where: { id: pagamento.metodoPagamentoId },
+      select: { nome: true, ativo: true },
     });
+    if (!metodo?.ativo) {
+      const message = "Este método de pagamento já não está disponível. Escolha outro.";
+      throw new Recusa({
+        ok: false,
+        codigo: "VALIDACAO",
+        message,
+        errors: { [`pagamentos.${indice}.metodoPagamentoId`]: [message] },
+      });
+    }
+    nomes.push(metodo.nome);
   }
-  return metodo;
+  return nomes;
 }
 
 /** A record and what was sent are the same when nothing a person typed differs. */
@@ -231,7 +252,14 @@ function mesmoConteudo(registo: RegistoVista, enviado: RegistoPreparado): boolea
     registo.facturaCodigo === enviado.facturaCodigo &&
     registo.nota === enviado.nota &&
     mesmoDesconto(registo.desconto, enviado.desconto) &&
-    registo.metodoPagamentoId === enviado.metodoPagamentoId &&
+    registo.pagamentos.length === enviado.pagamentos.length &&
+    registo.pagamentos.every((pagamento, indice) => {
+      const outro = enviado.pagamentos[indice]!;
+      return (
+        pagamento.metodoPagamentoId === outro.metodoPagamentoId &&
+        pagamento.valorCentimos === outro.valorCentimos
+      );
+    }) &&
     registo.linhas.length === enviado.linhas.length &&
     registo.linhas.every((linha, indice) => {
       const outra = enviado.linhas[indice]!;
@@ -265,7 +293,8 @@ type RegistoPreparado = {
   facturaCodigo: string | null;
   nota: string | null;
   desconto: Desconto | null;
-  metodoPagamentoId: string;
+  /** Every amount worked out, the last one's included — they add up to the total. */
+  pagamentos: { metodoPagamentoId: string; valorCentimos: number }[];
   linhas: {
     id: string;
     descricao: string;
@@ -348,6 +377,25 @@ function prepararRegisto(
   const desconto = parseDesconto(dados.desconto);
   if (desconto === "invalido") errors.desconto = [DESCONTO_INVALIDO];
 
+  // Every way of paying but the last was given an amount; the last is the rest
+  // of the total, worked out below once the total is known.
+  const parciais: number[] = [];
+  const escolhidos = new Set<string>();
+  for (const [indice, pagamento] of dados.pagamentos.entries()) {
+    if (escolhidos.has(pagamento.metodoPagamentoId)) {
+      errors[`pagamentos.${indice}.metodoPagamentoId`] = ["Este método já foi escolhido."];
+    }
+    escolhidos.add(pagamento.metodoPagamentoId);
+    if (indice === dados.pagamentos.length - 1) break;
+
+    const valor = parseValorCentimos(pagamento.valor ?? "");
+    if (valor === null || valor <= 0) {
+      errors[`pagamentos.${indice}.valor`] = ["Valor inválido (ex.: 30 000,00)."];
+    } else {
+      parciais.push(valor);
+    }
+  }
+
   if (Object.keys(errors).length > 0 || desconto === "invalido") {
     return { ok: false, codigo: "VALIDACAO", message: "Verifique os campos assinalados.", errors };
   }
@@ -365,6 +413,15 @@ function prepararRegisto(
     return { ok: false, codigo: "VALIDACAO", message, errors: { desconto: [message] } };
   }
 
+  const { valores, resto } = repartirPagamento(calculado.total, parciais);
+  if (parciais.length > 0 && resto <= 0) {
+    const message =
+      resto < 0
+        ? `Os valores indicados passam o total do registo em ${formatCentimos(-resto)}.`
+        : "Os valores indicados já somam o total do registo: não sobra nada para o último método.";
+    return { ok: false, codigo: "VALIDACAO", message, errors: { pagamentos: [message] } };
+  }
+
   return {
     relatorioId: dados.relatorioId,
     id: dados.id,
@@ -377,7 +434,10 @@ function prepararRegisto(
     facturaCodigo: dados.facturaCodigo,
     nota: dados.nota,
     desconto,
-    metodoPagamentoId: dados.metodoPagamentoId,
+    pagamentos: dados.pagamentos.map((pagamento, indice) => ({
+      metodoPagamentoId: pagamento.metodoPagamentoId,
+      valorCentimos: valores[indice]!,
+    })),
     linhas: lidas.map(({ linha, calculo }, indice) => {
       const precos = calculado.linhas[indice]!;
       return {
@@ -452,11 +512,8 @@ async function lerRegisto(tx: Tx, id: string): Promise<RegistoVista | null> {
   return registo ? vistaRegisto(registo) : null;
 }
 
-/** Line rows for a record — `tipo` and the method are copied down from it. */
-function linhasParaEscrever(
-  dados: RegistoPreparado,
-  metodoPagamentoNome: string,
-): Prisma.LinhaRelatorioUncheckedCreateInput[] {
+/** Line rows for a record — `relatorioId` and `tipo` are copied down from it. */
+function linhasParaEscrever(dados: RegistoPreparado): Prisma.LinhaRelatorioUncheckedCreateInput[] {
   return dados.linhas.map((linha, ordem) => ({
     id: linha.id,
     registoId: dados.id,
@@ -473,8 +530,20 @@ function linhasParaEscrever(
     valorCentimos: BigInt(linha.valorCentimos),
     artigoInvgestId: linha.artigoInvgestId,
     artigoCodigo: linha.artigoCodigo,
-    metodoPagamentoId: dados.metodoPagamentoId,
-    metodoPagamentoNome,
+    ordem,
+  }));
+}
+
+/** Payment rows for a record, in the order they were given. */
+function pagamentosParaEscrever(
+  dados: RegistoPreparado,
+  nomes: readonly string[],
+): Prisma.PagamentoRegistoCreateManyInput[] {
+  return dados.pagamentos.map((pagamento, ordem) => ({
+    registoId: dados.id,
+    metodoPagamentoId: pagamento.metodoPagamentoId,
+    metodoPagamentoNome: nomes[ordem]!,
+    valorCentimos: BigInt(pagamento.valorCentimos),
     ordem,
   }));
 }
@@ -511,7 +580,7 @@ async function escreverRegisto(
       throw conflito(null, "Este registo foi apagado noutra janela.");
     }
 
-    const metodo = await metodoAtivo(tx, dados.metodoPagamentoId);
+    const nomes = await nomesDosMetodos(tx, dados.pagamentos, []);
     await tx.registoRelatorio.create({
       data: {
         id: dados.id,
@@ -524,11 +593,10 @@ async function escreverRegisto(
         facturaCodigo: dados.facturaCodigo,
         nota: dados.nota,
         ...colunasDoDesconto(dados.desconto),
-        metodoPagamentoId: dados.metodoPagamentoId,
-        metodoPagamentoNome: metodo.nome,
       },
     });
-    await tx.linhaRelatorio.createMany({ data: linhasParaEscrever(dados, metodo.nome) });
+    await tx.linhaRelatorio.createMany({ data: linhasParaEscrever(dados) });
+    await tx.pagamentoRegisto.createMany({ data: pagamentosParaEscrever(dados, nomes) });
 
     const registo = (await lerRegisto(tx, dados.id))!;
     await tx.relatorioHistorico.create({
@@ -566,12 +634,7 @@ async function escreverRegisto(
     return { ok: true, registo: anterior, versaoRelatorio: relatorio.versao };
   }
 
-  // Keeping the method keeps its recorded name, even if the method has since
-  // been retired or renamed; only a newly chosen method must be active.
-  const metodoPagamentoNome =
-    dados.metodoPagamentoId === anterior.metodoPagamentoId
-      ? anterior.metodoPagamentoNome
-      : (await metodoAtivo(tx, dados.metodoPagamentoId)).nome;
+  const nomes = await nomesDosMetodos(tx, dados.pagamentos, anterior.pagamentos);
 
   const { count } = await tx.registoRelatorio.updateMany({
     where: { id: dados.id, versao: dados.versao },
@@ -584,8 +647,6 @@ async function escreverRegisto(
       facturaCodigo: dados.facturaCodigo,
       nota: dados.nota,
       ...colunasDoDesconto(dados.desconto),
-      metodoPagamentoId: dados.metodoPagamentoId,
-      metodoPagamentoNome,
       versao: { increment: 1 },
     },
   });
@@ -597,7 +658,7 @@ async function escreverRegisto(
   await tx.linhaRelatorio.deleteMany({
     where: { registoId: dados.id, id: { notIn: dados.linhas.map((linha) => linha.id) } },
   });
-  for (const linha of linhasParaEscrever(dados, metodoPagamentoNome)) {
+  for (const linha of linhasParaEscrever(dados)) {
     const { id, ...campos } = linha;
     await tx.linhaRelatorio.upsert({
       where: { id },
@@ -605,6 +666,10 @@ async function escreverRegisto(
       update: { ...campos, versao: { increment: 1 } },
     });
   }
+  // So are the payments. They have no ids of their own to keep: the record's
+  // version is what guards them.
+  await tx.pagamentoRegisto.deleteMany({ where: { registoId: dados.id } });
+  await tx.pagamentoRegisto.createMany({ data: pagamentosParaEscrever(dados, nomes) });
 
   const registo = (await lerRegisto(tx, dados.id))!;
   await tx.relatorioHistorico.create({
@@ -779,16 +844,19 @@ export async function finalizarRelatorio(
       }
 
       // Read after the update holds the row lock, so these are exactly the
-      // lines that were finalized.
-      const linhas = await tx.linhaRelatorio.findMany({ where: { relatorioId: id }, select: SELECT_LINHA });
-      const totais = calcularTotais(linhas.map(vistaLinha));
+      // records that were finalized.
+      const registos = (
+        await tx.registoRelatorio.findMany({ where: { relatorioId: id }, select: SELECT_REGISTO })
+      ).map(vistaRegisto);
+      const totais = calcularTotais(registos);
+      const linhas = registos.reduce((soma, registo) => soma + registo.linhas.length, 0);
 
       await tx.relatorioHistorico.create({
         data: {
           relatorioId: id,
           acao: "FINALIZADO",
           depois: {
-            linhas: linhas.length,
+            linhas,
             vendas: totais.vendas,
             despesas: totais.despesas,
             saldo: totais.saldo,
@@ -798,7 +866,7 @@ export async function finalizarRelatorio(
         },
       });
 
-      return { dia: dateParaDia(relatorio.dia), linhas: linhas.length, saldo: totais.saldo };
+      return { dia: dateParaDia(relatorio.dia), linhas, saldo: totais.saldo };
     });
   } catch (error) {
     if (error instanceof Recusa) return error.resultado;
@@ -927,8 +995,8 @@ async function nomeEmUso(nome: string, excetoId?: string): Promise<boolean> {
 /**
  * Creates or renames a payment method.
  *
- * A rename does not rewrite past lines: each line keeps the name the method had
- * when it was saved, so a finalized report still reads as it did.
+ * A rename does not rewrite past records: each payment keeps the name the
+ * method had when it was saved, so a finalized report still reads as it did.
  */
 export async function guardarMetodoPagamento(
   _prev: FormState,
@@ -979,7 +1047,7 @@ export async function guardarMetodoPagamento(
 
 /**
  * Retires or restores a payment method. Retiring only removes it from the
- * picker: lines that used it keep pointing at it and keep its name.
+ * picker: records paid with it keep pointing at it and keep its name.
  */
 export async function alternarMetodoPagamento(formData: FormData): Promise<void> {
   const admin = await assertAdminRole();
