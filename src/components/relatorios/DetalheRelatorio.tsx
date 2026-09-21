@@ -48,8 +48,11 @@ export function DetalheRelatorio({
       </p>
 
       {/* Side by side only on wide screens: next to the admin sidebar, a 1280px
-          viewport leaves the lines table too narrow to read. */}
-      <div className="grid items-start gap-8 2xl:grid-cols-[minmax(0,1fr)_24rem]">
+          viewport leaves the lines table too narrow to read. The single column
+          below that is `minmax(0, 1fr)` rather than the default `auto`, or it
+          grows to the table by method's minimum width and the whole page
+          scrolls sideways on a phone instead of just that table. */}
+      <div className="grid grid-cols-[minmax(0,1fr)] items-start gap-8 2xl:grid-cols-[minmax(0,1fr)_24rem]">
         <div className="space-y-6">
           <TabelaRegistos registos={relatorio.registos} />
           <ResumoRelatorio totais={calcularTotais(relatorio.registos)} />
