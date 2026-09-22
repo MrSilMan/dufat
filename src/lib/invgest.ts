@@ -200,24 +200,54 @@ export type InvgestInvoice = {
   items?: InvgestInvoiceItem[] | null;
 };
 
+type InvoiceFilters = {
+  type?: string;
+  status?: string;
+  dateFrom?: string;
+  dateTo?: string;
+};
+
 /**
  * List issued documents (GET /invoices, scope invoices:read).
  *
  * INVGEST has no text search on this endpoint — only type/status/date filters
- * (§4) — so the picker asks for a recent window and narrows it here.
+ * (§4); a `search` parameter is silently ignored — so the picker asks for a
+ * recent window and narrows it here.
  */
 export async function listInvoices(
-  params: {
-    type?: string;
-    status?: string;
-    dateFrom?: string;
-    dateTo?: string;
-    limit?: number;
-    offset?: number;
-  } = {},
+  params: InvoiceFilters & { limit?: number; offset?: number } = {},
+): Promise<{ invoices: InvgestInvoice[]; total: number; hasMore: boolean }> {
+  const res = await request<{
+    data: InvgestInvoice[];
+    pagination?: { total?: number; hasMore?: boolean };
+  }>("GET", "invoices", { query: params });
+  return {
+    invoices: res.data ?? [],
+    total: res.pagination?.total ?? res.data?.length ?? 0,
+    hasMore: res.pagination?.hasMore ?? false,
+  };
+}
+
+/**
+ * Page through /invoices (100 per page, newest first) up to `maxInvoices`.
+ *
+ * A document created between two pages pushes the rest down by one, so the
+ * next page can repeat the last document of the previous one; ids dedupe that.
+ */
+export async function listAllInvoices(
+  opts: InvoiceFilters & { maxInvoices?: number } = {},
 ): Promise<InvgestInvoice[]> {
-  const res = await request<{ data: InvgestInvoice[] }>("GET", "invoices", { query: params });
-  return res.data ?? [];
+  const { maxInvoices = 1000, ...filters } = opts;
+  const all = new Map<string, InvgestInvoice>();
+  let offset = 0;
+  while (all.size < maxInvoices) {
+    const limit = Math.min(100, maxInvoices - all.size);
+    const { invoices, hasMore } = await listInvoices({ ...filters, limit, offset });
+    for (const invoice of invoices) all.set(invoice.id, invoice);
+    if (!hasMore || invoices.length === 0) break;
+    offset += invoices.length;
+  }
+  return [...all.values()];
 }
 
 /** One document with its lines (GET /invoices/:id, scope invoices:read). */

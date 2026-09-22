@@ -1,4 +1,5 @@
 import "server-only";
+import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import {
@@ -11,12 +12,13 @@ import {
   getInvoice,
   isInvgestEnabled,
   listClients,
-  listInvoices,
-  listItems,
+  listAllInvoices,
+  listAllItems,
   precoComIva,
   InvgestError,
   type InvgestInvoice,
   type InvgestInvoiceItem,
+  type InvgestItem,
 } from "@/lib/invgest";
 
 /**
@@ -30,7 +32,8 @@ import {
  *
  * Every call here is read-only (see {@link file://../invgest.ts}) and cached
  * for a few seconds: a colaborador typing a name would otherwise spend the
- * key's 120 reads/minute (docs §12) on the same query eight times.
+ * key's 120 reads/minute (docs §12) on the same query eight times. The live
+ * catalog is held for a few minutes — see {@link catalogoInvgest}.
  */
 
 const TTL_MS = 30_000;
@@ -107,25 +110,46 @@ export type ArtigoEncontrado = {
 
 export type ResultadoPesquisa<T> = {
   resultados: T[];
-  /** Set when the live INVGEST half of the search could not be reached. */
+  /** Set when the live INVGEST half of the search could not be reached, or was cut short. */
   aviso?: string;
 };
 
 const LIMITE = 8;
 
-/** Local products whose name, SKU or INVGEST code matches. */
+/** Lower case with the accents taken off, so "lampada" finds "Lâmpada". */
+function semAcentos(texto: string): string {
+  return texto.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+}
+
+/** The typed words, each of which must match — in any order. */
+function palavrasDe(termo: string): string[] {
+  return termo.split(/\s+/).filter(Boolean);
+}
+
+/**
+ * The accented letters Portuguese uses and what they fold to. The database has
+ * no `unaccent`, so `translate` does it — both strings must stay the same length.
+ */
+const COM_ACENTO = "ÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇáàâãäéèêëíìîïóòôõöúùûüç";
+const SEM_ACENTO = "AAAAAEEEEIIIIOOOOOUUUUCaaaaaeeeeiiiiooooouuuuc";
+
+/** Local products where every typed word is in the name, SKU or a code. */
 async function artigosLocais(termo: string): Promise<ArtigoEncontrado[]> {
+  const condicoes = palavrasDe(semAcentos(termo)).map(
+    (palavra) =>
+      Prisma.sql`translate(concat_ws(' ', p.name, p.sku, p."modelCode", p."invgestItemCode"), ${COM_ACENTO}, ${SEM_ACENTO}) ILIKE ${`%${palavra.replace(/[\\%_]/g, "\\$&")}%`}`,
+  );
+  const encontrados = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT p.id FROM "Product" p
+    WHERE ${Prisma.join(condicoes, " AND ")}
+    ORDER BY p."invgestSyncedAt" DESC NULLS LAST, p.name ASC
+    LIMIT ${LIMITE}
+  `;
+  if (encontrados.length === 0) return [];
+
   const produtos = await prisma.product.findMany({
-    where: {
-      OR: [
-        { name: { contains: termo, mode: "insensitive" } },
-        { sku: { contains: termo, mode: "insensitive" } },
-        { modelCode: { contains: termo, mode: "insensitive" } },
-        { invgestItemCode: { contains: termo, mode: "insensitive" } },
-      ],
-    },
+    where: { id: { in: encontrados.map((produto) => produto.id) } },
     orderBy: [{ invgestSyncedAt: { sort: "desc", nulls: "last" } }, { name: "asc" }],
-    take: LIMITE,
     select: {
       id: true,
       name: true,
@@ -149,6 +173,55 @@ async function artigosLocais(termo: string): Promise<ArtigoEncontrado[]> {
 }
 
 /**
+ * The whole INVGEST catalog, searched here rather than by INVGEST.
+ *
+ * INVGEST's own `search` matches what was typed as one phrase, accents and all:
+ * "hibrido" does not find "Híbrido", nor "parede foco" "Foco De Parede". So the
+ * catalog — about 1300 articles, 330 KB, fourteen calls, a second and a half —
+ * is fetched whole and kept on the server. Only the matches go to the browser.
+ *
+ * Fresh for two minutes. Up to ten, a search is answered from the copy in hand
+ * while a new one is fetched behind it, so only the first search after a quiet
+ * spell waits; past that it waits rather than offer a stale price.
+ */
+const CATALOGO_FRESCO_MS = 2 * 60_000;
+const CATALOGO_VALIDO_MS = 10 * 60_000;
+
+/** `texto` and `codigo` are {@link semAcentos}'d once, not on every keystroke. */
+type ArtigoDoCatalogo = { item: InvgestItem; texto: string; codigo: string };
+let catalogo: { artigos: ArtigoDoCatalogo[]; em: number } | null = null;
+let catalogoACarregar: Promise<ArtigoDoCatalogo[]> | null = null;
+
+function carregarCatalogo(): Promise<ArtigoDoCatalogo[]> {
+  catalogoACarregar ??= listAllItems()
+    .then((items) => {
+      const artigos = items.map((item) => ({
+        item,
+        texto: semAcentos(`${item.description} ${item.code ?? ""}`),
+        codigo: semAcentos(item.code ?? ""),
+      }));
+      catalogo = { artigos, em: Date.now() };
+      return artigos;
+    })
+    .finally(() => {
+      catalogoACarregar = null;
+    });
+  return catalogoACarregar;
+}
+
+async function catalogoInvgest(): Promise<ArtigoDoCatalogo[]> {
+  const idade = catalogo ? Date.now() - catalogo.em : Infinity;
+  if (catalogo && idade < CATALOGO_FRESCO_MS) return catalogo.artigos;
+  if (catalogo && idade < CATALOGO_VALIDO_MS) {
+    const jaEmCurso = catalogoACarregar !== null;
+    const recarga = carregarCatalogo();
+    if (!jaEmCurso) recarga.catch((error) => registarFalha("catalogo", error));
+    return catalogo.artigos;
+  }
+  return carregarCatalogo();
+}
+
+/**
  * Articles matching what was typed: the imported catalog first, then anything
  * INVGEST knows about that the last import did not bring in.
  *
@@ -164,12 +237,21 @@ export async function procurarArtigos(termo: string): Promise<ResultadoPesquisa<
     if (!isInvgestEnabled()) return { resultados: locais };
 
     const vistos = new Set(locais.map((artigo) => artigo.invgestItemId).filter(Boolean));
+    const palavras = palavrasDe(semAcentos(procura));
+    // A code typed in full goes first, then names that start with the first
+    // word; the rest keep INVGEST's order.
+    const ordem = ({ texto, codigo }: ArtigoDoCatalogo) =>
+      codigo === palavras.join(" ") ? 0 : texto.startsWith(palavras[0]!) ? 1 : 2;
     try {
-      const { items } = await listItems({ search: procura, limit: LIMITE * 2 });
-      const remotos = items
-        .filter((item) => !vistos.has(item.id))
+      const remotos = (await catalogoInvgest())
+        .filter(
+          (artigo) =>
+            !vistos.has(artigo.item.id) &&
+            palavras.every((palavra) => artigo.texto.includes(palavra)),
+        )
+        .sort((a, b) => ordem(a) - ordem(b))
         .slice(0, LIMITE)
-        .map<ArtigoEncontrado>((item) => ({
+        .map<ArtigoEncontrado>(({ item }) => ({
           chave: item.id,
           descricao: item.description,
           codigo: item.code ?? null,
@@ -244,16 +326,18 @@ export type FacturaEncontrada = {
 };
 
 /**
- * How far back the picker looks for a document to copy, and how many it takes.
+ * How far back the picker looks for a document to copy.
  *
- * The cap is what actually binds: INVGEST returns newest first, so this is the
- * 100 most recent documents within the window — at Dufat's rate that is the
- * last week or two, which is the horizon a daily till report works in. Anything
- * older is typed in by hand, and the picker says so rather than appearing to
- * search everything.
+ * The whole window is read, every page of it. It used to be the first page
+ * only — the 100 newest documents — and at Dufat's rate, two in three of them
+ * pro-formas, that reached back barely a week: an invoice from two weeks ago
+ * was in INVGEST but not in the picker. The window is about 400 documents,
+ * four calls, cached with everything else here. The ceiling is a guard against
+ * a runaway window, not a limit that should bind; the picker says so if it
+ * does. The panel (`ImportarFactura`) names the window, so change both.
  */
 const DIAS_FACTURAS = 60;
-const LIMITE_FACTURAS = 100;
+const MAX_FACTURAS = 1000;
 
 function comoFacturaEncontrada(factura: InvgestInvoice): FacturaEncontrada {
   return {
@@ -288,8 +372,14 @@ export async function procurarFacturas(
 
   const recentes = await cachear(`facturas:${dateFrom}`, async () => {
     try {
-      const facturas = await listInvoices({ dateFrom, limit: LIMITE_FACTURAS });
-      return { resultados: facturas.map(comoFacturaEncontrada) };
+      const facturas = await listAllInvoices({ dateFrom, maxInvoices: MAX_FACTURAS });
+      return {
+        resultados: facturas.map(comoFacturaEncontrada),
+        aviso:
+          facturas.length >= MAX_FACTURAS
+            ? `Só aparecem os ${MAX_FACTURAS} documentos mais recentes.`
+            : undefined,
+      };
     } catch (error) {
       registarFalha("facturas", error);
       return {

@@ -118,7 +118,7 @@ export function ImportarFactura({
           <p className="text-sm font-semibold text-a-text">Preencher a partir da INVGEST</p>
           <p className="mt-1 text-xs text-a-muted">
             Escolha um documento emitido e o registo fica preenchido com o cliente e os artigos.
-            Só aparecem os mais recentes — um documento antigo escreve-se à mão.
+            Aparecem os dos últimos 60 dias — um documento mais antigo escreve-se à mão.
           </p>
 
           <input
