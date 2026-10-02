@@ -89,6 +89,9 @@ export type ColaboradorInput = {
   departamentoNome: string | null;
   /** From `diasEsperados()` — already pro-rated for hire date, leave and part time. */
   diasEsperados: number;
+  /** The same for the whole month: the contract week alone, before hire date,
+   *  exit or leave. The minimum-days rule is measured against it. */
+  diasEsperadosMesCompleto: number;
   folhaEstado: EstadoFolha | null;
   folhaSubmetidaEm: Dia | null;
   folhaPrazo: Dia | null;

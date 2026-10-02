@@ -146,6 +146,7 @@ export async function carregarColaboradores(
       dataSaida: user.dataSaida ? toDia(user.dataSaida) : null,
       ausencias: user.ausencias.map((a) => ({ inicio: toDia(a.inicio), fim: toDia(a.fim) })),
     });
+    const mesCompleto = diasEsperados({ periodo, diasSemana: semana });
 
     const atividades: AtividadeInput[] = user.atividades.map((a) => ({
       id: a.id,
@@ -172,6 +173,7 @@ export async function carregarColaboradores(
       // would divide by zero in consistency; the engine guards, but keeping the
       // figure honest here means the detail screen shows 0, not 22.
       diasEsperados: Math.min(esperados, Math.max(diasUteis, esperados)),
+      diasEsperadosMesCompleto: mesCompleto,
       folhaEstado: folha?.estado ?? null,
       folhaSubmetidaEm: folha?.submetidaEm ? toDia(folha.submetidaEm) : null,
       folhaPrazo: folha?.prazoSubmissao ? toDia(folha.prazoSubmissao) : null,

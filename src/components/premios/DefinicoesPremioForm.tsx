@@ -197,7 +197,7 @@ export function DefinicoesPremioForm({ parametros }: { parametros: AwardParametr
           <AdminField
             label="Mínimo de dias com registo"
             htmlFor="minDiasAtividade"
-            hint="Ajustado proporcionalmente para quem entrou a meio do mês, esteve de licença ou trabalha a tempo parcial."
+            hint="Para um mês completo. Reduzido proporcionalmente para quem entrou a meio do mês, esteve de licença ou trabalha a tempo parcial; nunca aumentado para quem trabalha 6 dias por semana."
             errors={state.errors?.minDiasAtividade}
           >
             <input

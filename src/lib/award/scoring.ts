@@ -284,7 +284,12 @@ export function avaliarElegibilidade(
 
   // Pro-rated against this person's own expected days: someone hired on the
   // 20th cannot reach a flat 15 no matter how well they work.
-  const minimo = exigenciaDeDias(parametros.minDiasAtividade, colaborador.diasEsperados, diasUteisMes);
+  const minimo = exigenciaDeDias(
+    parametros.minDiasAtividade,
+    colaborador.diasEsperados,
+    colaborador.diasEsperadosMesCompleto,
+    diasUteisMes,
+  );
   if (brutos.diasComAtividade < minimo) {
     return `Apenas ${brutos.diasComAtividade} dias com registo (mínimo ${minimo} para ${colaborador.diasEsperados} dias esperados).`;
   }
@@ -300,14 +305,23 @@ export function avaliarElegibilidade(
   return null;
 }
 
-/** The minimum-days rule, scaled to the employee's expected days. */
+/**
+ * The minimum-days rule, scaled to the employee's expected days.
+ *
+ * The base is what a whole month asks of anyone on a full-time week. It shrinks
+ * in proportion for a mid-month hire, approved leave or a part-time week, but
+ * it never grows: a six-day week is measured against its own full month (26
+ * days), not the 22 weekdays, or a minimum of 19 would quietly become 23.
+ */
 export function exigenciaDeDias(
   minimoBase: number,
   esperados: number,
+  esperadosMesCompleto: number,
   diasUteisMes: number,
 ): number {
-  if (diasUteisMes <= 0) return 0;
-  const escalado = Math.ceil((minimoBase / diasUteisMes) * esperados);
+  const referencia = Math.max(diasUteisMes, esperadosMesCompleto);
+  if (referencia <= 0) return 0;
+  const escalado = Math.ceil((minimoBase * esperados) / referencia);
   // Never demand more days than the person was expected to work.
   return Math.max(0, Math.min(escalado, esperados));
 }
